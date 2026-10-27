@@ -1,0 +1,52 @@
+#ifndef DROPBEAR_DISTROOPTIONS_H_
+#define DROPBEAR_DISTROOPTIONS_H_
+
+#ifdef DROPBEAR_WIN32_NATIVE
+#define DROPBEAR_WIN_CUSTOM_AUTH 1
+
+#define DROPBEAR_DEFADDRESS "0.0.0.0"
+#define DROPBEAR_DEFPORT "52222"
+#define DROPBEAR_PIDFILE "dropbear-win-data\\dropbear.pid"
+#define DROPBEAR_REEXEC 0
+#define INETD_MODE 0
+#define NON_INETD_MODE 1
+
+#define DROPBEAR_SVR_MULTIUSER 0
+#define DROPBEAR_SVR_DROP_PRIVS 0
+#define DROPBEAR_SVR_PASSWORD_AUTH 1
+#define DROPBEAR_SVR_PAM_AUTH 0
+#define DROPBEAR_SVR_PUBKEY_AUTH 0
+#define DROPBEAR_SVR_PUBKEY_OPTIONS 0
+
+#define DROPBEAR_SVR_LOCALTCPFWD 1
+#define DROPBEAR_SVR_REMOTETCPFWD 1
+#define DROPBEAR_SVR_LOCALSTREAMFWD 0
+#define DROPBEAR_SVR_REMOTESTREAMFWD 0
+#define DROPBEAR_SVR_AGENTFWD 0
+#define DROPBEAR_X11FWD 0
+#define DROPBEAR_SFTPSERVER 0
+#define DO_MOTD 0
+
+#define DROPBEAR_DELAY_HOSTKEY 1
+#define ED25519_PRIV_FILENAME "dropbear-win-data\\hostkey_ed25519"
+#define DROPBEAR_ECDSA 0
+#define DROPBEAR_SK_KEYS 0
+#define DROPBEAR_DSS 0
+#define DROPBEAR_RSA 0
+#define DROPBEAR_ED25519 1
+#define DROPBEAR_SNTRUP761 0
+#define DROPBEAR_MLKEM768 0
+
+/* Password verification is supplied by win-account.c, not libc crypt(). */
+#ifndef HAVE_CRYPT
+#define HAVE_CRYPT 1
+#endif
+#ifndef HAVE_GAI_STRERROR
+#define HAVE_GAI_STRERROR 1
+#endif
+#ifndef HAVE_DAEMON
+#define HAVE_DAEMON 1
+#endif
+#endif
+
+#endif
