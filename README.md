@@ -311,6 +311,22 @@ python tests/windows_stress.py dist/dropbear-win-x86.exe build/stress-x86.json
 
 ## Windows 服务值守
 
+### 从 SSH 启动桌面程序
+
+服务及普通 SSH 命令仍以 LocalSystem 在 Windows 会话 0 运行。需要把 GUI 显示到
+当前已登录的物理控制台桌面时，在 SSH 的 CMD 中使用专用命令：
+
+```cmd
+"C:\Program Files\DropbearWin\dropbear-win-x64.exe" --desktop-launch "C:\Windows\System32\notepad.exe"
+```
+
+可在程序路径后追加参数。程序路径必须是带盘符的绝对 EXE 路径。启动的桌面程序使用
+该控制台登录用户的 Windows 令牌和环境，独立于 SSH 会话；SSH 断开后程序仍会运行。
+它不会继承 SSH 服务的 SYSTEM 权限。没有用户登录物理控制台时命令明确失败。
+此功能需要 Windows Vista / Server 2008 或更新版本；在 XP / Server 2003 上，
+普通 SSH 与服务仍可使用。普通 SSH 命令继续保留原有 SYSTEM 权限和会话 0 行为。
+若需要启动 RDP 桌面，此命令目前只选择物理控制台会话，不会猜测其他用户的会话。
+
 ### 开机自动启动
 
 将 EXE 放在仅管理员可写的固定目录后运行：

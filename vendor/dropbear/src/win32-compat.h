@@ -233,6 +233,7 @@ int dropbear_win_spawn_shell(const char *command, const char *ssh_user,
 		int *writefd, int *readfd, int *errfd, pid_t *pid);
 int dropbear_win_spawn_connection(int socket_fd, int auth_fd, int argc, char **argv);
 int dropbear_win_exec_main(void);
+int dropbear_win_desktop_launch_main(void);
 int dropbear_win_receive_connection(const char *pipe_handle_text, int *auth_fd);
 void dropbear_win_process_cleanup(void);
 void dropbear_win_resource_summary(char *output, size_t size);

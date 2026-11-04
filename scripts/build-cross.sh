@@ -99,7 +99,8 @@ assert_pe_compatibility() {
 
     for forbidden in InitOnceExecuteOnce _putenv_s BCrypt CreatePseudoConsole \
         InitializeProcThreadAttributeList UpdateProcThreadAttribute \
-        GetSystemTimePreciseAsFileTime GetTickCount64 CancelIoEx; do
+        GetSystemTimePreciseAsFileTime GetTickCount64 CancelIoEx \
+        WTSGetActiveConsoleSessionId; do
         if grep -Fq "$forbidden" <<<"$info"; then
             printf '%s: unsupported API import: %s\n' "$arch" "$forbidden" >&2
             return 1

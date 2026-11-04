@@ -5,6 +5,21 @@ EXE 同时支持直接运行和 Windows SCM 服务模式。
 **权限提醒：项目 SSH 账号独立于 Windows 用户，不会在登录时切换 Windows 身份。
 默认服务以 LocalSystem 运行，远程命令及文件传输继承该服务身份。**
 
+## 从 SSH 启动已登录用户的桌面程序
+
+普通 SSH 命令留在服务的会话 0。需要在目标机物理控制台显示 GUI 时，在 SSH
+交互式 CMD 中明确调用：
+
+```cmd
+"C:\Program Files\DropbearWin\dropbear-win-x64.exe" --desktop-launch "C:\Windows\System32\notepad.exe"
+```
+
+桌面程序使用已登录控制台用户的普通 Windows 令牌及环境，不继承服务的 SYSTEM
+权限，也不会因 SSH 断开而退出。程序路径必须是带盘符的绝对 EXE 路径，后面可以
+传递程序参数。没有登录的物理控制台用户时会报错；RDP 会话不会自动选中。
+此命令依赖 Windows Vista / Server 2008 及更新系统的 WTS 用户令牌接口，
+XP / Server 2003 上只禁用该命令，普通 SSH 服务和命令仍保持原兼容目标。
+
 ## 使用参数设置开机自动启动
 
 将 EXE 放在仅管理员可写的固定目录（例如 `C:\Program Files\DropbearWin`）。
@@ -119,6 +134,7 @@ sc.exe delete DropbearWin
 其命令进程树会被回收。关闭一个 SSH channel 只回收该 channel 的任务，其他 channel
 继续运行。普通命令退出也会清理它产生的后台子孙进程，避免后台进程占住管道导致
 客户端一直等不到 EOF。长驻业务进程应使用独立服务，不依赖 SSH 断线后继续运行。
+`--desktop-launch` 是明确请求的例外：桌面程序在登录用户的独立会话中运行。
 
 52222 的接管同样适用于服务实例：启动控制台实例可以结束旧服务进程，随后 SCM
 显示该服务停止；再次启动服务也可以接管控制台实例。双方始终独占绑定，不共享

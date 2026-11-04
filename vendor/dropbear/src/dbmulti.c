@@ -119,6 +119,8 @@ static int run_native_internal(int argc, char **argv) {
 			!strcmp(argv[1], "--install-autostart-elevated")))
 		return dropbear_win_install_autostart(argc, argv);
 	if (argc == 2 && !strcmp(argv[1], "--dropbear-win-exec")) return dropbear_win_exec_main();
+	if (argc >= 2 && !strcmp(argv[1], "--desktop-launch"))
+		return dropbear_win_desktop_launch_main();
 	if (argc == 2 && strcmp(argv[1], "--dropbear-win-probe") == 0) {
 		const char *backend = getenv("DROPBEAR_WIN_SHELL");
 		if (!backend || !backend[0]) backend = "cmd";

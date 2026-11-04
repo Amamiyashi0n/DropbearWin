@@ -106,6 +106,156 @@ static int exec_argument(wchar_t *line, size_t *used, const wchar_t *arg) {
 	return 1;
 }
 
+static HMODULE desktop_system_library(const wchar_t *name) {
+	wchar_t path[MAX_PATH];
+	DWORD length = GetSystemDirectoryW(path, MAX_PATH);
+	if (!length || length >= MAX_PATH || length + 1 + wcslen(name) >= MAX_PATH) return NULL;
+	path[length++] = L'\\';
+	wcscpy(path + length, name);
+	return LoadLibraryW(path);
+}
+
+/* Launch only an explicitly requested program in the logged-on user's
+ * desktop. The ordinary SSH shell keeps the service token and session 0.
+ * Resolve these APIs at runtime so XP/2003 can still load the server. */
+int dropbear_win_desktop_launch_main(void) {
+	typedef DWORD (WINAPI *active_session_fn)(void);
+	typedef BOOL (WINAPI *query_user_token_fn)(ULONG, PHANDLE);
+	typedef BOOL (WINAPI *create_environment_fn)(LPVOID *, HANDLE, BOOL);
+	typedef BOOL (WINAPI *destroy_environment_fn)(LPVOID);
+	typedef LPWSTR *(WINAPI *parse_command_fn)(LPCWSTR, int *);
+	HMODULE kernel, wts = NULL, userenv = NULL, shell32 = NULL;
+	active_session_fn active_session;
+	query_user_token_fn query_user_token;
+	create_environment_fn create_environment;
+	destroy_environment_fn destroy_environment = NULL;
+	parse_command_fn parse_command;
+	LPWSTR *arguments = NULL;
+	wchar_t *line = NULL;
+	wchar_t executable[32768], directory[32768], *slash;
+	HANDLE token = NULL, process_token = NULL;
+	LPVOID environment = NULL;
+	STARTUPINFOW startup;
+	PROCESS_INFORMATION process;
+	TOKEN_PRIVILEGES privileges;
+	LUID luid;
+	DWORD session, attributes, error, length;
+	int argc = 0, i, result = 1;
+	size_t used = 0;
+	const wchar_t *privilege_names[] = {
+		L"SeTcbPrivilege", L"SeAssignPrimaryTokenPrivilege",
+		L"SeIncreaseQuotaPrivilege"
+	};
+
+	kernel = GetModuleHandleW(L"kernel32.dll");
+	shell32 = desktop_system_library(L"shell32.dll");
+	wts = desktop_system_library(L"wtsapi32.dll");
+	userenv = desktop_system_library(L"userenv.dll");
+	parse_command = shell32 ? (parse_command_fn)(void *)GetProcAddress(shell32, "CommandLineToArgvW") : NULL;
+	active_session = kernel ? (active_session_fn)(void *)GetProcAddress(kernel,
+		"WTSGetActiveConsoleSessionId") : NULL;
+	query_user_token = wts ? (query_user_token_fn)(void *)GetProcAddress(wts, "WTSQueryUserToken") : NULL;
+	create_environment = userenv ? (create_environment_fn)(void *)GetProcAddress(userenv, "CreateEnvironmentBlock") : NULL;
+	destroy_environment = userenv ? (destroy_environment_fn)(void *)GetProcAddress(userenv, "DestroyEnvironmentBlock") : NULL;
+	if (!parse_command || !active_session || !query_user_token ||
+			!create_environment || !destroy_environment) {
+		fputs("Desktop launch requires Windows Vista/Server 2008 or newer.\n", stderr);
+		goto done;
+	}
+	arguments = parse_command(GetCommandLineW(), &argc);
+	if (!arguments || argc < 3 || !arguments[2][0]) {
+		fputs("Usage: dropbear-win.exe --desktop-launch C:\\absolute\\program.exe [arguments...]\n", stderr);
+		goto done;
+	}
+	/* Do not search the SYSTEM service's PATH or resolve relative to its cwd. */
+	if (!((arguments[2][0] >= L'A' && arguments[2][0] <= L'Z') ||
+			(arguments[2][0] >= L'a' && arguments[2][0] <= L'z')) ||
+			arguments[2][1] != L':' ||
+			(arguments[2][2] != L'\\' && arguments[2][2] != L'/')) {
+		fputs("Desktop launch requires a drive-absolute executable path.\n", stderr);
+		goto done;
+	}
+	length = GetFullPathNameW(arguments[2], 32768, executable, NULL);
+	if (!length || length >= 32768) {
+		fputs("Could not normalize the desktop executable path.\n", stderr);
+		goto done;
+	}
+	attributes = GetFileAttributesW(executable);
+	if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+		fputs("Desktop executable does not exist or is a directory.\n", stderr);
+		goto done;
+	}
+	line = calloc(32768, sizeof(*line));
+	if (!line || !exec_argument(line, &used, executable)) goto done;
+	for (i = 3; i < argc; i++) if (!exec_argument(line, &used, arguments[i])) {
+		fputs("Desktop command exceeds the Windows command-line limit.\n", stderr);
+		goto done;
+	}
+	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+			&process_token)) goto done;
+	for (i = 0; i < 3; i++) {
+		if (!LookupPrivilegeValueW(NULL, privilege_names[i], &luid)) goto done;
+		memset(&privileges, 0, sizeof(privileges));
+		privileges.PrivilegeCount = 1;
+		privileges.Privileges[0].Luid = luid;
+		privileges.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+		SetLastError(ERROR_SUCCESS);
+		if (!AdjustTokenPrivileges(process_token, FALSE, &privileges, 0, NULL, NULL) ||
+				GetLastError() != ERROR_SUCCESS) {
+			fputs("Could not enable desktop launch privileges.\n", stderr);
+			goto done;
+		}
+	}
+	session = active_session();
+	if (session == 0xffffffffUL) {
+		fputs("No active console session is available.\n", stderr);
+		goto done;
+	}
+	if (!query_user_token(session, &token)) {
+		fprintf(stderr, "No logged-on console user is available: Windows error %lu.\n",
+			(unsigned long)GetLastError());
+		goto done;
+	}
+	if (!create_environment(&environment, token, FALSE)) {
+		fprintf(stderr, "Could not build the desktop user's environment: Windows error %lu.\n",
+			(unsigned long)GetLastError());
+		goto done;
+	}
+	wcscpy(directory, executable);
+	slash = wcsrchr(directory, L'\\');
+	if (!slash) goto done;
+	*slash = 0;
+	memset(&startup, 0, sizeof(startup));
+	memset(&process, 0, sizeof(process));
+	startup.cb = sizeof(startup);
+	startup.lpDesktop = L"winsta0\\default";
+	startup.dwFlags = STARTF_USESHOWWINDOW;
+	startup.wShowWindow = SW_SHOWNORMAL;
+	if (!CreateProcessAsUserW(token, executable, line, NULL, NULL, FALSE,
+			CREATE_BREAKAWAY_FROM_JOB | CREATE_UNICODE_ENVIRONMENT,
+			environment, directory, &startup, &process)) {
+		error = GetLastError();
+		fprintf(stderr, "Desktop process startup failed: Windows error %lu.\n",
+			(unsigned long)error);
+		goto done;
+	}
+	printf("Desktop process started: PID %lu, session %lu.\n",
+		(unsigned long)process.dwProcessId, (unsigned long)session);
+	CloseHandle(process.hThread);
+	CloseHandle(process.hProcess);
+	result = 0;
+done:
+	if (process_token) CloseHandle(process_token);
+	if (environment && destroy_environment) destroy_environment(environment);
+	if (token) CloseHandle(token);
+	if (arguments) LocalFree(arguments);
+	free(line);
+	if (userenv) FreeLibrary(userenv);
+	if (wts) FreeLibrary(wts);
+	if (shell32) FreeLibrary(shell32);
+	return result;
+}
+
 int dropbear_win_exec_main(void) {
 	char magic[4];
 	unsigned int count, i;
@@ -862,7 +1012,9 @@ int dropbear_win_spawn_shell(const char *command, const char *ssh_user,
 	}
 	job = CreateJobObjectW(NULL, NULL);
 	memset(&job_limits, 0, sizeof(job_limits));
-	job_limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+	/* Only explicit CREATE_BREAKAWAY_FROM_JOB launches leave the SSH task tree. */
+	job_limits.BasicLimitInformation.LimitFlags =
+		JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
 	if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation,
 		&job_limits, sizeof(job_limits))) goto fail;
 	created = CreateProcessW(application, command_line, NULL, NULL, TRUE,
