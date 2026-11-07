@@ -64,6 +64,9 @@ Register this server as the Windows service "DropbearWin"? [y/N]
   `"C:\Program Files\DropbearWin\dropbear-win-x64.exe" --service DropbearWin -p 22222`。
 - 在安装目录生成 `uninstall-dropbear-service.cmd`，调用 EXE 的 `--uninstall`。
   默认保留 `account.conf`、主机密钥及日志；传入 `--purge-data` 才删除这些数据。
+- 由安装后的 EXE 等待当前便携进程退出，再清理原 EXE 和相邻
+  `dropbear-win-data` 中的已知程序文件，正常情况下不再依赖重启 Windows 才删除
+  原 EXE。绿色版所在目录为空时一并删除；其中的其他文件会保留。
 
 服务已注册且指向本程序时,后续控制台启动不再询问(缺卸载脚本时会补写)。服务名
 已被其他程序占用时不改动现有服务,仅提示。权限不足时报告 Windows 错误并退出

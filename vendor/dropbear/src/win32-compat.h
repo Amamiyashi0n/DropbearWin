@@ -250,6 +250,7 @@ int dropbear_win_is_service(void);
 void dropbear_win_maybe_register_service(int argc, char **argv);
 int dropbear_win_install_autostart(int argc, char **argv);
 int dropbear_win_uninstall(int argc, char **argv);
+int dropbear_win_cleanup_portable_main(int argc, char **argv);
 wchar_t *dropbear_win_build_service_command_line(const wchar_t *executable,
 	int argc, char **argv);
 wchar_t *dropbear_win_build_autostart_relaunch_parameters(int argc, char **argv);

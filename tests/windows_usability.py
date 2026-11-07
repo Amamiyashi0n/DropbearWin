@@ -215,11 +215,14 @@ def run(executable):
     with deployment(executable) as fixture:
         (fixture.directory / "account.conf").unlink()
         port = free_port()
-        process = fixture.start(port, setup_input=f"agent\n{fixture.password}\n{fixture.password}\n".encode())
+        process = fixture.start(port, setup_input=(
+            f"agent\nfirst-password\ndifferent-password\n"
+            f"{fixture.password}\n{fixture.password}\n").encode())
         fixture.ready(process, port)
         with connect(port, fixture.password) as client:
             assert execute(client, "echo first-run")[2] == 0
         assert b"pbkdf2-sha256$" in (fixture.directory / "account.conf").read_bytes()
+        assert "Passwords do not match. Please try again." in fixture.logtext()
     print("PASS: first-run account setup produces a usable authenticated server", flush=True)
 
     with deployment(executable) as fixture:
@@ -534,7 +537,9 @@ def interactive_register_test(executable):
             assert installed_exe.is_file()
             assert (install_dir / "dropbear-win.installed").is_file()
             assert (installed_data / "account.conf").read_bytes() == original_account
-            assert not portable_data.exists()
+            eventually(lambda: not deployed.exists())
+            eventually(lambda: not portable_data.exists())
+            eventually(lambda: not Path(temp).exists())
             query = " ".join(command("qc", "DropbearWin").stdout.decode(
                 errors="replace").replace('"', ' ').split())
             assert "AUTO_START" in query and str(installed_exe) in query, query

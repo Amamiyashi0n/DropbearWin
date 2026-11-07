@@ -120,6 +120,8 @@ static int run_native_internal(int argc, char **argv) {
 		return dropbear_win_install_autostart(argc, argv);
 	if (argc >= 2 && !strcmp(argv[1], "--uninstall"))
 		return dropbear_win_uninstall(argc, argv);
+	if (argc >= 2 && !strcmp(argv[1], "--cleanup-portable"))
+		return dropbear_win_cleanup_portable_main(argc, argv);
 	if (argc == 2 && !strcmp(argv[1], "--dropbear-win-exec")) return dropbear_win_exec_main();
 	if (argc >= 2 && !strcmp(argv[1], "--desktop-launch"))
 		return dropbear_win_desktop_launch_main();

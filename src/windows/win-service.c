@@ -404,6 +404,105 @@ static void clean_portable_data(const wchar_t *source_exe, const char *source_di
 		fprintf(stderr, "Installed; portable data directory is not empty: %s\n", source_dir);
 }
 
+/* The portable process cannot delete its own running EXE, and may still hold
+ * its log open. Start the installed copy, wait for the portable parent to
+ * exit, then remove only the EXE and the known adjacent data files. */
+static int launch_portable_cleanup(const wchar_t *installed_exe,
+		const wchar_t *source_exe, const char *portable_data) {
+	wchar_t data[32768], command[4096], working_directory[32768], *slash;
+	STARTUPINFOW startup;
+	PROCESS_INFORMATION process;
+	int written;
+	if (wcschr(installed_exe, L'"') || wcschr(source_exe, L'"') ||
+			!MultiByteToWideChar(CP_ACP, 0, portable_data, -1,
+				data, sizeof(data) / sizeof(data[0])) || wcschr(data, L'"')) return 0;
+	written = _snwprintf(command, sizeof(command) / sizeof(command[0]),
+		L"\"%ls\" --cleanup-portable %lu \"%ls\" \"%ls\"",
+		installed_exe, (unsigned long)GetCurrentProcessId(), source_exe, data);
+	if (written <= 0 || written >= (int)(sizeof(command) / sizeof(command[0]))) return 0;
+	if (wcslen(installed_exe) >= sizeof(working_directory) / sizeof(working_directory[0])) return 0;
+	wcscpy(working_directory, installed_exe);
+	slash = wcsrchr(working_directory, L'\\');
+	if (!slash) return 0;
+	*slash = 0;
+	memset(&startup, 0, sizeof(startup));
+	memset(&process, 0, sizeof(process));
+	startup.cb = sizeof(startup);
+	if (!CreateProcessW(installed_exe, command, NULL, NULL, FALSE, CREATE_NO_WINDOW,
+			NULL, working_directory, &startup, &process)) return 0;
+	CloseHandle(process.hThread);
+	CloseHandle(process.hProcess);
+	printf("Portable cleanup will finish after this process exits: %ls\n", source_exe);
+	return 1;
+}
+
+int dropbear_win_cleanup_portable_main(int argc, char **argv) {
+	wchar_t current[32768], install_dir[32768], installed_exe[32768];
+	wchar_t marker[32768], source_exe[32768], source_directory[32768];
+	wchar_t expected_data[32768], requested_data[32768];
+	wchar_t *source_dir, *source_name, *current_name;
+	char installed_data[MAX_PATH], *end;
+	HANDLE parent = NULL;
+	DWORD length, parent_id, attributes, waited;
+	int written, result = 1, retries;
+
+	if (argc != 5 || strcmp(argv[1], "--cleanup-portable") ||
+			!MultiByteToWideChar(CP_ACP, 0, argv[3], -1, source_exe,
+				sizeof(source_exe) / sizeof(source_exe[0])) ||
+			!MultiByteToWideChar(CP_ACP, 0, argv[4], -1, requested_data,
+				sizeof(requested_data) / sizeof(requested_data[0]))) goto done;
+	parent_id = strtoul(argv[2], &end, 10);
+	if (!parent_id || !end || *end) goto done;
+	length = GetModuleFileNameW(NULL, current, sizeof(current) / sizeof(current[0]));
+	if (!length || length >= sizeof(current) / sizeof(current[0]) ||
+			!install_executable_path(current, install_dir, installed_exe,
+				sizeof(installed_exe) / sizeof(installed_exe[0])) ||
+			_wcsicmp(current, installed_exe) ||
+			!dropbear_win_installed_data_path(installed_data, sizeof(installed_data))) goto done;
+	written = _snwprintf(marker, sizeof(marker) / sizeof(marker[0]),
+		L"%ls\\dropbear-win.installed", install_dir);
+	attributes = written > 0 && written < (int)(sizeof(marker) / sizeof(marker[0]))
+		? GetFileAttributesW(marker) : INVALID_FILE_ATTRIBUTES;
+	if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY) ||
+			_wcsicmp(source_exe, current) == 0 || wcslen(source_exe) >= 32768) goto done;
+
+	wcscpy(expected_data, source_exe);
+	source_dir = wcsrchr(expected_data, L'\\');
+	source_name = wcsrchr(source_exe, L'\\');
+	current_name = wcsrchr(current, L'\\');
+	if (!source_dir || !source_name || !current_name ||
+			_wcsicmp(source_name + 1, current_name + 1)) goto done;
+	*source_dir = 0;
+	wcscpy(source_directory, expected_data);
+	written = _snwprintf(expected_data + wcslen(expected_data),
+		(sizeof(expected_data) / sizeof(expected_data[0])) - wcslen(expected_data),
+		L"\\dropbear-win-data");
+	if (written <= 0 || _wcsicmp(expected_data, requested_data) ||
+			!_stricmp(argv[4], installed_data)) goto done;
+
+	parent = OpenProcess(SYNCHRONIZE, FALSE, parent_id);
+	if (parent) {
+		waited = WaitForSingleObject(parent, 60000);
+		if (waited != WAIT_OBJECT_0) goto done;
+	} else if (GetLastError() != ERROR_INVALID_PARAMETER) {
+		goto done;
+	}
+	clean_portable_data(source_exe, argv[4], installed_data);
+	for (retries = 0; retries < 40; retries++) {
+		if (DeleteFileW(source_exe) || GetLastError() == ERROR_FILE_NOT_FOUND ||
+				GetLastError() == ERROR_PATH_NOT_FOUND) {
+			/* Remove the portable folder only when it is now empty. */
+			RemoveDirectoryW(source_directory);
+			result = 0;
+			break;
+		}
+		Sleep(100);
+	}
+done:
+	if (parent) CloseHandle(parent);
+	return result;
+}
+
 static int install_registered_service(int argc, char **argv, DWORD start_type) {
 	WCHAR source_exe[32768], install_dir[32768], installed_exe[32768];
 	WCHAR backup_exe[32768], marker[32768];
@@ -568,11 +667,14 @@ done:
 		if (created_account) DeleteFileA(account_path);
 		if (created_data_dir) RemoveDirectoryA(installed_data);
 	} else {
-		clean_portable_data(source_exe, portable_data, installed_data);
-		if (_wcsicmp(source_exe, installed_exe) && !DeleteFileW(source_exe)) {
-			if (MoveFileExW(source_exe, NULL, MOVEFILE_DELAY_UNTIL_REBOOT))
-				printf("Portable EXE scheduled for removal at next restart: %ls\n", source_exe);
-			else fputs("Installed, but the portable EXE must be removed manually.\n", stderr);
+		if (_wcsicmp(source_exe, installed_exe) &&
+				!launch_portable_cleanup(installed_exe, source_exe, expected_portable)) {
+			clean_portable_data(source_exe, expected_portable, installed_data);
+			if (!DeleteFileW(source_exe)) {
+				if (MoveFileExW(source_exe, NULL, MOVEFILE_DELAY_UNTIL_REBOOT))
+					printf("Portable EXE scheduled for removal at next restart: %ls\n", source_exe);
+				else fputs("Installed, but the portable EXE must be removed manually.\n", stderr);
+			}
 		}
 	}
 	if (backed_up_exe) DeleteFileW(backup_exe);

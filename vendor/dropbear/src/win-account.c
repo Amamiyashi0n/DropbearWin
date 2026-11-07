@@ -475,20 +475,34 @@ int dropbear_win_prepare(void) {
 	fputs("Dropbear for Windows first-run setup\nSSH username: ", stdout);
 	fflush(stdout);
 	if (!read_line(username, sizeof(username))) return 0;
-	if (!read_secret("SSH password: ", password, sizeof(password)) ||
-		!read_secret("Confirm password: ", confirm, sizeof(confirm))) return 0;
-	if (strcmp(password, confirm) != 0) {
-		fputs("Passwords do not match.\n", stderr);
+	for (;;) {
+		if (!read_secret("SSH password: ", password, sizeof(password)) ||
+				!read_secret("Confirm password: ", confirm, sizeof(confirm))) {
+			m_burn(password, sizeof(password));
+			m_burn(confirm, sizeof(confirm));
+			return 0;
+		}
+		if (strcmp(password, confirm) == 0) break;
+		fputs("Passwords do not match. Please try again.\n", stderr);
 		m_burn(password, sizeof(password));
 		m_burn(confirm, sizeof(confirm));
-		return 0;
 	}
 	if (dropbear_win_random(salt, sizeof(salt)) != 0 ||
-		!derive_password(password, strlen(password), salt, ACCOUNT_ITERATIONS, hash)) return 0;
+			!derive_password(password, strlen(password), salt, ACCOUNT_ITERATIONS, hash)) {
+		m_burn(password, sizeof(password));
+		m_burn(confirm, sizeof(confirm));
+		m_burn(hash, sizeof(hash));
+		return 0;
+	}
 	to_hex(salt, sizeof(salt), salt_hex);
 	to_hex(hash, sizeof(hash), hash_hex);
 	file = fopen(account_file, "wb");
-	if (!file) return 0;
+	if (!file) {
+		m_burn(password, sizeof(password));
+		m_burn(confirm, sizeof(confirm));
+		m_burn(hash, sizeof(hash));
+		return 0;
+	}
 	fprintf(file, "%s\npbkdf2-sha256$%d$%s$%s\n",
 		username, ACCOUNT_ITERATIONS, salt_hex, hash_hex);
 	fclose(file);
