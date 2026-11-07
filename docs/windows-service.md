@@ -43,7 +43,7 @@ XP / Server 2003 上只禁用该命令，普通 SSH 服务和命令仍保持原�
 `DROPBEAR_WIN_DATA_DIR` / `DROPBEAR_WIN_ACCOUNT_FILE` 环境变量。
 安装后运行 `sc.exe qc DropbearWin`
 检查 `START_TYPE` 为 `AUTO_START`；需要立即启动时运行 `sc.exe start DropbearWin`。
-安装目录中的 `uninstall-dropbear-service.cmd` 可停止并删除服务。服务启动不会
+安装目录中的 `uninstall-dropbear-service.cmd` 可执行配套卸载。服务启动不会
 弹出 UAC；以后手动运行 EXE 仍会按 Windows 规则请求提升，系统不会永久记住一次
 UAC 同意。XP/Server 2003 没有 UAC 时，需要从管理员会话运行安装命令。
 
@@ -62,9 +62,8 @@ Register this server as the Windows service "DropbearWin"? [y/N]
 - 服务名 `DropbearWin`,显示名 `Dropbear for Windows`,自动启动,LocalSystem 身份。
 - 服务命令行携带本次启动的全部原始参数,例如
   `"C:\Program Files\DropbearWin\dropbear-win-x64.exe" --service DropbearWin -p 22222`。
-- 在安装目录生成 `uninstall-dropbear-service.cmd`:执行 `net stop DropbearWin`
-  与 `sc delete DropbearWin` 并暂停显示结果。卸载保留 `account.conf`、主机密钥
-  及日志,再次运行 EXE 回答 `y` 可重新注册。
+- 在安装目录生成 `uninstall-dropbear-service.cmd`，调用 EXE 的 `--uninstall`。
+  默认保留 `account.conf`、主机密钥及日志；传入 `--purge-data` 才删除这些数据。
 
 服务已注册且指向本程序时,后续控制台启动不再询问(缺卸载脚本时会补写)。服务名
 已被其他程序占用时不改动现有服务,仅提示。权限不足时报告 Windows 错误并退出
@@ -125,6 +124,25 @@ SCM 服务环境独立于当前终端；在终端设置的 `DROPBEAR_WIN_*` 环�
 RUNNING，收到停止请求后经 STOP_PENDING 到 STOPPED。
 
 ## 停止、升级和任务生命周期
+
+### 卸载内置安装
+
+在目标机本地的管理员控制台运行：
+
+```bat
+"C:\Program Files\DropbearWin\dropbear-win-x64.exe" --uninstall
+rem 同时删除账号、主机密钥和日志时：
+"C:\Program Files\DropbearWin\dropbear-win-x64.exe" --uninstall --purge-data
+```
+
+也可运行安装目录中的 `uninstall-dropbear-service.cmd`，并向脚本传入可选的
+`--purge-data`。卸载会核验服务指向本安装 EXE，停止并删除服务，然后移除安装
+目录中的程序文件。正在运行的 EXE 或脚本可能需要重启 Windows 才能清理完成。
+默认保留 `%ProgramData%\DropbearWin` 以便以后重装继续使用原账号和主机身份；
+`--purge-data` 只删除本程序已知的数据文件，目录中其他文件会保留并报错。
+再次安装时，若便携 EXE 旁没有账号配置，会自动复用保留的数据。若卸载提示需重启
+完成文件清理，请重启后再安装。不要从该服务的 SSH 会话执行卸载，因为停止服务会
+中断当前命令。
 
 ```bat
 sc.exe stop DropbearWin

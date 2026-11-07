@@ -346,12 +346,15 @@ SSH 账号，然后将 EXE 复制到系统盘的 `Program Files\DropbearWin`，�
 
 Windows 不会永久记住一次 UAC 同意：以后手动启动 EXE 时仍可能提示；开机时由 SCM
 直接启动已注册的服务。默认服务以 LocalSystem 身份运行，SSH 登录后的命令和文件
-传输继承该身份。删除服务可使用安装目录中的 `uninstall-dropbear-service.cmd`。
+传输继承该身份。卸载请在目标机本地运行安装目录中的
+`uninstall-dropbear-service.cmd`，或执行安装 EXE 的 `--uninstall`；默认保留账号
+和主机密钥，附加 `--purge-data` 才会删除安装数据。
 
 直接在控制台运行 EXE(不需要任何参数)时，程序会在账号就绪后询问是否把当前
 程序注册为 Windows 服务 `DropbearWin`：回答 `y` 会执行同样的 C 盘迁移并注册
 自动启动服务，随后退出当前便携进程；安装目录生成卸载脚本
-`uninstall-dropbear-service.cmd`（停止并删除服务；安装后的账号与主机密钥保留）。
+`uninstall-dropbear-service.cmd`（停止并删除服务及程序文件；安装后的账号与主机密钥
+默认保留）。
 回答其他值或直接回车则跳过，继续以绿色版控制台方式运行。注册一次
 之后，后续启动检测到服务已指向本程序，不再重复询问；服务名已被其他程序占用
 时会明确提示且不改动现有服务。

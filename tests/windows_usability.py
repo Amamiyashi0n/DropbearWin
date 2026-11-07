@@ -544,6 +544,13 @@ def interactive_register_test(executable):
                 assert execute(client, "echo installed")[0].strip() == b"installed"
             assert (installed_data / "hostkey_ed25519").is_file()
             assert (installed_data / "service.log").is_file()
+            removed = subprocess.run([str(installed_exe), "--uninstall"], env=env,
+                                     capture_output=True, timeout=45)
+            assert removed.returncode == 0, removed.stdout + removed.stderr
+            eventually(lambda: command("query", "DropbearWin", check=False).returncode != 0,
+                       timeout=20)
+            assert (installed_data / "account.conf").read_bytes() == original_account
+            assert (installed_data / "hostkey_ed25519").is_file()
         finally:
             if process.poll() is None:
                 process.terminate()
