@@ -11,6 +11,8 @@ int dropbear_win_account_lookup(const char *username,
 int dropbear_win_custom_auth_enabled(void);
 const char *dropbear_win_shell(void);
 const char *dropbear_win_data_dir(void);
+const char *dropbear_win_account_file_path(void);
+int dropbear_win_installed_data_path(char *path, size_t size);
 int dropbear_win_account_name(char *username, size_t username_size);
 int dropbear_win_prepare(void);
 int dropbear_win_ed25519_selftest(void);

@@ -22,8 +22,7 @@ XP / Server 2003 上只禁用该命令，普通 SSH 服务和命令仍保持原�
 
 ## 使用参数设置开机自动启动
 
-将 EXE 放在仅管理员可写的固定目录（例如 `C:\Program Files\DropbearWin`）。
-在 Windows 控制台或 PowerShell 中运行：
+可从任意临时目录在 Windows 控制台或 PowerShell 中运行：
 
 ```powershell
 .\dropbear-win-x64.exe --install-autostart
@@ -32,38 +31,44 @@ XP / Server 2003 上只禁用该命令，普通 SSH 服务和命令仍保持原�
 
 32 位系统使用 `dropbear-win-x86.exe`。EXE 内嵌管理员权限请求清单；在支持 UAC
 的系统上，首次手动运行会弹出系统权限提示。没有账号配置时，安装命令先交互创建
-独立 SSH 账号，再注册 `DropbearWin` 为自动启动的 Windows 服务。服务以默认的
-LocalSystem 身份在开机后、用户登录前运行。
+独立 SSH 账号，再将 EXE 复制到系统盘 `Program Files\DropbearWin`，将账号、
+主机密钥迁移到 `%ProgramData%\DropbearWin`，注册自动启动的 `DropbearWin` 服务。
+服务以 LocalSystem 身份在开机后、用户登录前运行。XP / Server 2003 的数据目录
+使用 `%ALLUSERSPROFILE%\Application Data\DropbearWin`。
 
-该参数可重复执行：如果同名服务已指向当前 EXE，它会更新服务参数和启动类型；
-如果指向别的 EXE，则报错并保持原服务不变。安装后运行 `sc.exe qc DropbearWin`
+复制及注册成功后会清理原 EXE 旁的 `dropbear-win-data`；原 EXE 若仍被当前进程
+占用，将在下次重启时删除。安装失败时保留便携文件。已有服务必须先停止，且仅当
+它指向当前 EXE 或目标安装 EXE 时才允许更新；目标数据若与便携账号或主机密钥
+冲突，安装会中止。显式安装命令始终读取当前 EXE 旁的数据，不继承 SSH 服务的
+`DROPBEAR_WIN_DATA_DIR` / `DROPBEAR_WIN_ACCOUNT_FILE` 环境变量。
+安装后运行 `sc.exe qc DropbearWin`
 检查 `START_TYPE` 为 `AUTO_START`；需要立即启动时运行 `sc.exe start DropbearWin`。
-EXE 目录中的 `uninstall-dropbear-service.cmd` 可停止并删除服务。服务启动不会
+安装目录中的 `uninstall-dropbear-service.cmd` 可停止并删除服务。服务启动不会
 弹出 UAC；以后手动运行 EXE 仍会按 Windows 规则请求提升，系统不会永久记住一次
 UAC 同意。XP/Server 2003 没有 UAC 时，需要从管理员会话运行安装命令。
 
 ## 交互式注册(免参数)
 
-把 EXE 放到固定目录并以管理员身份打开控制台直接运行(不带参数),完成账号设置
+以管理员身份打开控制台直接运行 EXE(不带参数),完成账号设置
 (或读取到已有账号)后,程序会询问:
 
 ```text
 Register this server as the Windows service "DropbearWin"? [y/N]
 ```
 
-回答 `y` 即完成注册并生成卸载脚本;回车或其他回答跳过注册,继续作为控制台
-程序运行。注册内容:
+回答 `y` 会将 EXE 与数据迁移到 C 盘、注册自动启动服务、生成卸载脚本并退出
+便携进程；回车或其他回答跳过安装,继续作为绿色版控制台程序运行。注册内容:
 
-- 服务名 `DropbearWin`,显示名 `Dropbear for Windows`,按需启动(demand),LocalSystem 身份。
+- 服务名 `DropbearWin`,显示名 `Dropbear for Windows`,自动启动,LocalSystem 身份。
 - 服务命令行携带本次启动的全部原始参数,例如
-  `"C:\Tools\DropbearWin\dropbear-win-x64.exe" --service DropbearWin -p 22222`。
-- 在 EXE 目录生成 `uninstall-dropbear-service.cmd`:执行 `net stop DropbearWin`
+  `"C:\Program Files\DropbearWin\dropbear-win-x64.exe" --service DropbearWin -p 22222`。
+- 在安装目录生成 `uninstall-dropbear-service.cmd`:执行 `net stop DropbearWin`
   与 `sc delete DropbearWin` 并暂停显示结果。卸载保留 `account.conf`、主机密钥
   及日志,再次运行 EXE 回答 `y` 可重新注册。
 
 服务已注册且指向本程序时,后续控制台启动不再询问(缺卸载脚本时会补写)。服务名
-已被其他程序占用时不改动现有服务,仅提示。权限不足时报告 Windows 错误并继续
-控制台运行。从管道或重定向 stdin 启动时不出现询问;`--service` 方式与
+已被其他程序占用时不改动现有服务,仅提示。权限不足时报告 Windows 错误并退出
+当前安装尝试。从管道或重定向 stdin 启动时不出现询问;`--service` 方式与
 脚本化部署不受影响。注册后用 `net start DropbearWin` 启动服务。
 
 ## 手动注册(--service)
@@ -105,7 +110,9 @@ sc.exe query DropbearWin
 
 ## 数据、日志和启动状态
 
-默认数据目录是 EXE 旁的 `dropbear-win-data`，与直接运行共用账号和主机密钥。
+绿色版默认数据目录是 EXE 旁的 `dropbear-win-data`。内置安装流程完成后，
+安装目录中的标记使 EXE 改用 `%ProgramData%\DropbearWin`；手工 `sc.exe create`
+不会执行迁移，仍使用 EXE 旁的便携数据目录。
 服务的默认工作目录固定为 EXE 所在目录，不使用 SCM 的 System32 工作目录。
 SCM 服务环境独立于当前终端；在终端设置的 `DROPBEAR_WIN_*` 环境变量不会自动
 成为服务配置。上面的基本部署使用默认数据位置和 CMD 后端。

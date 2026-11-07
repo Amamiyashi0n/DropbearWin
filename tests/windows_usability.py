@@ -502,49 +502,59 @@ def console_ctrl_c_test(executable):
 
 
 def interactive_register_test(executable):
-    """A real console must offer service registration without any parameter,
-    register on demand, and drop an uninstall script next to the binary."""
+    """On a disposable Windows host, install from a portable copy and verify
+    that the service reads migrated ProgramData rather than the old directory.
+    Never disturb an existing DropbearWin installation on a developer host.
+    """
     sc = str(Path(os.environ["SystemRoot"]) / "System32" / "sc.exe")
     def command(*args, check=True):
         return subprocess.run([sc, *args], check=check, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, timeout=15)
-    with tempfile.TemporaryDirectory(prefix="dropbear setup ") as temp:
+    install_dir = Path(os.environ["SystemDrive"] + r"\Program Files\DropbearWin")
+    installed_data = Path(os.environ["ProgramData"]) / "DropbearWin"
+    if (install_dir.exists() or installed_data.exists() or
+            command("query", "DropbearWin", check=False).returncode == 0):
+        print("SKIP: installation test needs an unused Windows host", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="dropbear portable ") as temp:
         deployed = Path(temp) / "dropbear-win.exe"
         shutil.copy2(executable, deployed)
-        with deployment(str(deployed)) as fixture:
-            try:
-                port = free_port()
-                process = fixture.start(port, console=True, console_output=True)
-                queue_console_text(process.pid, "y\r")
-                fixture.ready(process, port)
-                captured = subprocess.run(
-                    [sys.executable, __file__, "--console-read", str(process.pid)],
-                    check=True, capture_output=True, timeout=10,
-                    creationflags=subprocess.CREATE_NO_WINDOW)
-                rows = json.loads(captured.stdout)
-                assert any("Service registered: DropbearWin" in row for row in rows), rows[-8:]
-                assert any("Uninstall script:" in row for row in rows), rows[-8:]
-                # sc.exe wraps long binary paths and the server quotes every
-                # argument; normalize whitespace and quotes before matching.
-                query = " ".join(command("qc", "DropbearWin").stdout.decode(
-                    errors="replace").replace('"', ' ').split())
-                assert "--service DropbearWin" in query, query
-                assert str(port) in query, query
-                script = (Path(temp) / "uninstall-dropbear-service.cmd").read_text()
-                assert "net stop DropbearWin" in script and "sc delete DropbearWin" in script
-
-                # Once the service points at this binary, a later console run
-                # must not ask again: a colliding instance fails on the port
-                # instead of waiting on the question.
-                second = fixture.start(port, console=True, console_output=True)
-                assert second.wait(timeout=15) != 0
-            finally:
-                command("stop", "DropbearWin", check=False)
-                command("delete", "DropbearWin", check=False)
-                eventually(lambda: command("query", "DropbearWin",
-                    check=False).returncode != 0, timeout=20)
-    print("PASS: interactive console registers DropbearWin, writes an uninstall "
-          "script, and skips the question once registered", flush=True)
+        portable_data = Path(temp) / "dropbear-win-data"
+        password = account(portable_data)
+        original_account = (portable_data / "account.conf").read_bytes()
+        port = free_port()
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith("DROPBEAR_WIN_")}
+        process = subprocess.Popen([str(deployed), "-p", f"127.0.0.1:{port}"],
+                                   env=env, creationflags=subprocess.CREATE_NEW_CONSOLE)
+        try:
+            queue_console_text(process.pid, "y\r")
+            assert process.wait(timeout=30) == 0
+            installed_exe = install_dir / deployed.name
+            assert installed_exe.is_file()
+            assert (install_dir / "dropbear-win.installed").is_file()
+            assert (installed_data / "account.conf").read_bytes() == original_account
+            assert not portable_data.exists()
+            query = " ".join(command("qc", "DropbearWin").stdout.decode(
+                errors="replace").replace('"', ' ').split())
+            assert "AUTO_START" in query and str(installed_exe) in query, query
+            command("start", "DropbearWin")
+            eventually(lambda: b"RUNNING" in command("query", "DropbearWin").stdout)
+            with connect(port, password) as client:
+                assert execute(client, "echo installed")[0].strip() == b"installed"
+            assert (installed_data / "hostkey_ed25519").is_file()
+            assert (installed_data / "service.log").is_file()
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=10)
+            command("stop", "DropbearWin", check=False)
+            command("delete", "DropbearWin", check=False)
+            eventually(lambda: command("query", "DropbearWin", check=False).returncode != 0,
+                       timeout=20)
+            shutil.rmtree(install_dir, ignore_errors=True)
+            shutil.rmtree(installed_data, ignore_errors=True)
+    print("PASS: portable EXE and account migrated; installed service uses ProgramData", flush=True)
 
 
 if __name__ == "__main__":

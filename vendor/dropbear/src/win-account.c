@@ -37,6 +37,21 @@ static int create_data_dir(const char *path) {
 	return CreateDirectoryA(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
 }
 
+/* The installed service stores its state outside Program Files. XP uses the
+ * All Users application-data directory; later Windows provides ProgramData. */
+int dropbear_win_installed_data_path(char *path, size_t size) {
+	const char *root = getenv("ProgramData");
+	const char *suffix = "\\DropbearWin";
+	int written;
+	if (!root || !root[0]) {
+		root = getenv("ALLUSERSPROFILE");
+		suffix = "\\Application Data\\DropbearWin";
+	}
+	if (!root || !root[0]) return 0;
+	written = snprintf(path, size, "%s%s", root, suffix);
+	return written > 0 && (size_t)written < size;
+}
+
 static int set_data_paths(void) {
 	char executable[MAX_PATH];
 	char *separator;
@@ -54,24 +69,35 @@ static int set_data_paths(void) {
 		*separator = '\0';
 		if (snprintf(data_dir, sizeof(data_dir), "%s\\dropbear-win-data", executable)
 				>= (int)sizeof(data_dir)) return 0;
-		if (!create_data_dir(data_dir)) {
-			const char *program_data = getenv("ProgramData");
-			const char *all_users = getenv("ALLUSERSPROFILE");
-			const char *temporary = getenv("TEMP");
-			if (program_data && snprintf(data_dir, sizeof(data_dir),
-					"%s\\DropbearWin", program_data) < (int)sizeof(data_dir) &&
-					create_data_dir(data_dir)) {
-				/* Windows Vista and later fallback. */
-			} else if (all_users && snprintf(data_dir, sizeof(data_dir),
-					"%s\\Application Data\\DropbearWin", all_users) < (int)sizeof(data_dir) &&
-					create_data_dir(data_dir)) {
-				/* Windows XP/Server 2003 fallback. */
-			} else if (temporary && snprintf(data_dir, sizeof(data_dir),
-					"%s\\DropbearWin", temporary) < (int)sizeof(data_dir) &&
-					create_data_dir(data_dir)) {
-				/* WinPE fallback when persistent locations are read-only. */
-			} else {
-				return 0;
+		/* The marker is written only after the installer copied and checked the
+		 * account and host key. Older portable/service deployments keep their
+		 * original adjacent data until explicitly migrated. */
+		{
+			char marker[MAX_PATH];
+			if (snprintf(marker, sizeof(marker), "%s\\dropbear-win.installed", executable)
+					>= (int)sizeof(marker)) return 0;
+			if (GetFileAttributesA(marker) != INVALID_FILE_ATTRIBUTES) {
+				if (!dropbear_win_installed_data_path(data_dir, sizeof(data_dir)) ||
+						!create_data_dir(data_dir)) return 0;
+			} else if (!create_data_dir(data_dir)) {
+				const char *program_data = getenv("ProgramData");
+				const char *all_users = getenv("ALLUSERSPROFILE");
+				const char *temporary = getenv("TEMP");
+				if (program_data && snprintf(data_dir, sizeof(data_dir),
+						"%s\\DropbearWin", program_data) < (int)sizeof(data_dir) &&
+						create_data_dir(data_dir)) {
+					/* Windows Vista and later fallback. */
+				} else if (all_users && snprintf(data_dir, sizeof(data_dir),
+						"%s\\Application Data\\DropbearWin", all_users) < (int)sizeof(data_dir) &&
+						create_data_dir(data_dir)) {
+					/* Windows XP/Server 2003 fallback. */
+				} else if (temporary && snprintf(data_dir, sizeof(data_dir),
+						"%s\\DropbearWin", temporary) < (int)sizeof(data_dir) &&
+						create_data_dir(data_dir)) {
+					/* WinPE fallback when persistent locations are read-only. */
+				} else {
+					return 0;
+				}
 			}
 		}
 	}
@@ -98,6 +124,11 @@ static int account_path(char *out, size_t outlen) {
 	if (strlen(account_file) >= outlen) return 0;
 	strcpy(out, account_file);
 	return 1;
+}
+
+const char *dropbear_win_account_file_path(void) {
+	if (!account_file[0] && !set_data_paths()) return NULL;
+	return account_file;
 }
 
 int dropbear_win_custom_auth_enabled(void) {

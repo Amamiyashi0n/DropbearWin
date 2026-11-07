@@ -4,6 +4,7 @@
 #include "win32-compat.h"
 #include "win-account.h"
 #include <shellapi.h>
+#include <sddl.h>
 
 extern int dropbear_main(int argc, char **argv, const char *multipath);
 static SERVICE_STATUS_HANDLE service_handle;
@@ -123,16 +124,14 @@ int dropbear_win_service_main(int argc, char **argv) {
 	return 0;
 }
 
-/* Zero-parameter deployment: the interactive console asks whether to register
- * the running binary as the Windows service, and writes an uninstall script
- * next to the executable. Registered services keep working without the
- * question; --service continues to work for scripted setups. */
+/* Zero-parameter deployment asks whether to migrate the portable copy into
+ * Program Files/ProgramData and register an automatic Windows service. */
 #define WIN_SETUP_NAME L"DropbearWin"
 #define WIN_SETUP_DISPLAY L"Dropbear for Windows"
 #define WIN_SETUP_SCRIPT L"uninstall-dropbear-service.cmd"
 
-static void write_uninstall_script(void) {
-	wchar_t executable[32768], *slash;
+static void write_uninstall_script(const wchar_t *executable) {
+	wchar_t directory[32768], *slash;
 	wchar_t path[MAX_PATH];
 	char script[] =
 		"@echo off\r\n"
@@ -142,11 +141,12 @@ static void write_uninstall_script(void) {
 		"pause\r\n";
 	FILE *file;
 	int written;
-	if (!GetModuleFileNameW(NULL, executable, 32768)) return;
-	slash = wcsrchr(executable, L'\\');
+	if (wcslen(executable) >= 32768) return;
+	wcscpy(directory, executable);
+	slash = wcsrchr(directory, L'\\');
 	if (!slash) return;
 	*slash = 0;
-	written = _snwprintf(path, MAX_PATH, L"%ls\\%ls", executable, WIN_SETUP_SCRIPT);
+	written = _snwprintf(path, MAX_PATH, L"%ls\\%ls", directory, WIN_SETUP_SCRIPT);
 	if (written <= 0 || written >= MAX_PATH) return;
 	file = _wfopen(path, L"wb");
 	if (!file) {
@@ -272,12 +272,303 @@ static int service_uses_current_executable(SC_HANDLE service, const wchar_t *exe
 	return same;
 }
 
-int dropbear_win_install_autostart(int argc, char **argv) {
-	WCHAR executable[32768];
+static int install_executable_path(const wchar_t *source, wchar_t *directory,
+		wchar_t *destination, size_t capacity) {
+	wchar_t drive[8], *name = wcsrchr(source, L'\\');
+	DWORD length = GetEnvironmentVariableW(L"SystemDrive", drive, 8);
+	int written;
+	if (!name || !length || length >= 8 || drive[1] != L':' || drive[2]) return 0;
+	written = _snwprintf(directory, capacity, L"%ls\\Program Files\\DropbearWin", drive);
+	if (written <= 0 || (size_t)written >= capacity) return 0;
+	written = _snwprintf(destination, capacity, L"%ls%ls", directory, name);
+	return written > 0 && (size_t)written < capacity;
+}
+
+/* ProgramData is writable by ordinary users by default. Keep the account
+ * hash and private host key accessible only to SYSTEM and Administrators. */
+static int secure_installed_data_directory(const char *path) {
+	PSECURITY_DESCRIPTOR descriptor = NULL;
+	SECURITY_ATTRIBUTES security;
+	DWORD attributes;
+	int ok;
+	if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+			L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", SDDL_REVISION_1,
+			&descriptor, NULL)) return 0;
+	memset(&security, 0, sizeof(security));
+	security.nLength = sizeof(security);
+	security.lpSecurityDescriptor = descriptor;
+	ok = CreateDirectoryA(path, &security) || GetLastError() == ERROR_ALREADY_EXISTS;
+	attributes = ok ? GetFileAttributesA(path) : INVALID_FILE_ATTRIBUTES;
+	ok = ok && attributes != INVALID_FILE_ATTRIBUTES &&
+		(attributes & FILE_ATTRIBUTE_DIRECTORY) &&
+		SetFileSecurityA(path, DACL_SECURITY_INFORMATION, descriptor);
+	LocalFree(descriptor);
+	return ok;
+}
+
+static int secure_installed_data_file(const char *path) {
+	PSECURITY_DESCRIPTOR descriptor = NULL;
+	int ok;
+	if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+			L"D:P(A;;FA;;;SY)(A;;FA;;;BA)", SDDL_REVISION_1,
+			&descriptor, NULL)) return 0;
+	ok = SetFileSecurityA(path, DACL_SECURITY_INFORMATION, descriptor);
+	LocalFree(descriptor);
+	return ok;
+}
+
+static int same_file_bytes(const char *left, const char *right) {
+	HANDLE a = INVALID_HANDLE_VALUE, b = INVALID_HANDLE_VALUE;
+	unsigned char ab[4096], bb[4096];
+	DWORD ac, bc;
+	int equal = 0;
+	a = CreateFileA(left, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	b = CreateFileA(right, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	if (a == INVALID_HANDLE_VALUE || b == INVALID_HANDLE_VALUE) goto done;
+	for (;;) {
+		if (!ReadFile(a, ab, sizeof(ab), &ac, NULL) ||
+				!ReadFile(b, bb, sizeof(bb), &bc, NULL) || ac != bc ||
+				memcmp(ab, bb, ac)) goto done;
+		if (!ac) { equal = 1; break; }
+	}
+done:
+	if (a != INVALID_HANDLE_VALUE) CloseHandle(a);
+	if (b != INVALID_HANDLE_VALUE) CloseHandle(b);
+	return equal;
+}
+
+/* Never overwrite an existing, different account or host identity. */
+static int install_data_file(const char *source_dir, const char *target_dir,
+		const char *name, int required, int *created) {
+	char source[MAX_PATH], target[MAX_PATH];
+	DWORD attributes;
+	*created = 0;
+	if (snprintf(source, sizeof(source), "%s\\%s", source_dir, name) >= (int)sizeof(source) ||
+			snprintf(target, sizeof(target), "%s\\%s", target_dir, name) >= (int)sizeof(target)) return 0;
+	if (!_stricmp(source, target)) return GetFileAttributesA(target) != INVALID_FILE_ATTRIBUTES || !required;
+	attributes = GetFileAttributesA(source);
+	if (attributes == INVALID_FILE_ATTRIBUTES) return !required;
+	if (attributes & FILE_ATTRIBUTE_DIRECTORY) return 0;
+	attributes = GetFileAttributesA(target);
+	if (attributes != INVALID_FILE_ATTRIBUTES) {
+		if (attributes & FILE_ATTRIBUTE_DIRECTORY || !same_file_bytes(source, target)) {
+			fprintf(stderr, "Installed %s differs from the portable copy; preserving both.\n", name);
+			return 0;
+		}
+		return 1;
+	}
+	*created = 1;
+	if (!CopyFileA(source, target, TRUE)) {
+		DeleteFileA(target);
+		return 0;
+	}
+	return same_file_bytes(source, target);
+}
+
+static void clean_portable_data(const wchar_t *source_exe, const char *source_dir,
+		const char *target_dir) {
+	char portable[MAX_PATH], source[MAX_PATH];
+	wchar_t executable[32768], *slash;
+	const char *names[] = { "account.conf", "hostkey_ed25519", "dropbear.pid", "service.log" };
+	size_t i;
+	if (!_stricmp(source_dir, target_dir) || wcslen(source_exe) >= 32768) return;
+	wcscpy(executable, source_exe);
+	slash = wcsrchr(executable, L'\\');
+	if (!slash) return;
+	*slash = 0;
+	if (WideCharToMultiByte(CP_ACP, 0, executable, -1, portable,
+			sizeof(portable), NULL, NULL) == 0) return;
+	if (strlen(portable) + sizeof("\\dropbear-win-data") > sizeof(portable)) return;
+	strcat(portable, "\\dropbear-win-data");
+	if (_stricmp(portable, source_dir)) return;
+	for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+		if (snprintf(source, sizeof(source), "%s\\%s", source_dir, names[i]) >= (int)sizeof(source)) return;
+		if (GetFileAttributesA(source) != INVALID_FILE_ATTRIBUTES && !DeleteFileA(source)) {
+			fprintf(stderr, "Installed, but could not remove portable %s.\n", source);
+			return;
+		}
+	}
+	if (!RemoveDirectoryA(source_dir))
+		fprintf(stderr, "Installed; portable data directory is not empty: %s\n", source_dir);
+}
+
+static int install_registered_service(int argc, char **argv, DWORD start_type) {
+	WCHAR source_exe[32768], install_dir[32768], installed_exe[32768];
+	WCHAR backup_exe[32768], marker[32768];
+	char portable_data[MAX_PATH], installed_data[MAX_PATH];
+	char account_path[MAX_PATH], hostkey_path[MAX_PATH], portable_account[MAX_PATH];
+	char expected_portable[MAX_PATH];
 	wchar_t *command_line = NULL;
 	SC_HANDLE manager = NULL, service = NULL;
-	DWORD length, error;
-	int match, result = 1;
+	SERVICE_STATUS status;
+	HANDLE marker_file;
+	DWORD length, attributes, open_error;
+	int match, marker_length, backup_length, result = 1, copied_exe = 0, backed_up_exe = 0;
+	int created_account = 0, created_hostkey = 0, created_marker = 0;
+	int created_data_dir = 0;
+
+	length = GetModuleFileNameW(NULL, source_exe, 32768);
+	if (!length || length >= 32768 ||
+			!install_executable_path(source_exe, install_dir, installed_exe, 32768) ||
+			!dropbear_win_installed_data_path(installed_data, sizeof(installed_data)) ||
+			strlen(dropbear_win_data_dir()) >= sizeof(portable_data)) {
+		fputs("Could not resolve the installed EXE and data paths.\n", stderr);
+		return 1;
+	}
+	strcpy(portable_data, dropbear_win_data_dir());
+	{
+		wchar_t source_dir[32768], *slash;
+		if (wcslen(source_exe) >= 32768) return 1;
+		wcscpy(source_dir, source_exe);
+		slash = wcsrchr(source_dir, L'\\');
+		if (!slash) return 1;
+		*slash = 0;
+		if (!WideCharToMultiByte(CP_ACP, 0, source_dir, -1,
+				expected_portable, sizeof(expected_portable), NULL, NULL) ||
+				strlen(expected_portable) + sizeof("\\dropbear-win-data") >
+					sizeof(expected_portable)) return 1;
+		strcat(expected_portable, "\\dropbear-win-data");
+	}
+	if (_stricmp(portable_data, expected_portable) &&
+			_stricmp(portable_data, installed_data)) {
+		fputs("Installer data must come from this EXE or the installed data directory.\n", stderr);
+		return 1;
+	}
+	marker_length = _snwprintf(marker, 32768, L"%ls\\dropbear-win.installed", install_dir);
+	backup_length = _snwprintf(backup_exe, 32768, L"%ls.install-backup-%lu", installed_exe,
+		(unsigned long)GetCurrentProcessId());
+	if (marker_length <= 0 || marker_length >= 32768 ||
+			backup_length <= 0 || backup_length >= 32768 ||
+			snprintf(account_path, sizeof(account_path), "%s\\account.conf", installed_data)
+				>= (int)sizeof(account_path) ||
+			snprintf(hostkey_path, sizeof(hostkey_path), "%s\\hostkey_ed25519", installed_data)
+				>= (int)sizeof(hostkey_path) ||
+			snprintf(portable_account, sizeof(portable_account), "%s\\account.conf", portable_data)
+				>= (int)sizeof(portable_account)) return 1;
+	if (!dropbear_win_account_file_path() ||
+			_stricmp(dropbear_win_account_file_path(), portable_account)) {
+		fputs("A custom account file cannot be migrated automatically.\n", stderr);
+		return 1;
+	}
+	manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE);
+	if (!manager) {
+		fprintf(stderr, "Could not open the service manager: error %lu.\n",
+			(unsigned long)GetLastError());
+		goto done;
+	}
+	service = OpenServiceW(manager, WIN_SETUP_NAME,
+		SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | SERVICE_CHANGE_CONFIG);
+	if (service) {
+		match = service_uses_current_executable(service, source_exe);
+		if (match == 0) match = service_uses_current_executable(service, installed_exe);
+		if (match != 1) {
+			fputs("A different DropbearWin service exists; leaving it unchanged.\n", stderr);
+			goto done;
+		}
+		if (!QueryServiceStatus(service, &status) || status.dwCurrentState != SERVICE_STOPPED) {
+			fputs("Stop the existing DropbearWin service before upgrading its files.\n", stderr);
+			goto done;
+		}
+	} else {
+		open_error = GetLastError();
+		if (open_error != ERROR_SERVICE_DOES_NOT_EXIST) {
+			fprintf(stderr, "Could not inspect DropbearWin: error %lu.\n",
+				(unsigned long)open_error);
+			goto done;
+		}
+	}
+	attributes = GetFileAttributesW(install_dir);
+	if (attributes == INVALID_FILE_ATTRIBUTES && !CreateDirectoryW(install_dir, NULL)) {
+		fputs("Could not create the installed EXE directory.\n", stderr);
+		goto done;
+	}
+	attributes = GetFileAttributesW(install_dir);
+	if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY)) goto done;
+	created_data_dir = GetFileAttributesA(installed_data) == INVALID_FILE_ATTRIBUTES;
+	if (!secure_installed_data_directory(installed_data)) {
+		fputs("Could not secure the installed data directory.\n", stderr);
+		goto done;
+	}
+	if (!install_data_file(portable_data, installed_data, "account.conf", 1, &created_account) ||
+			!install_data_file(portable_data, installed_data, "hostkey_ed25519", 0, &created_hostkey)) {
+		fputs("Could not migrate the portable account and host identity.\n", stderr);
+		goto done;
+	}
+	if (!secure_installed_data_file(account_path) ||
+			(GetFileAttributesA(hostkey_path) != INVALID_FILE_ATTRIBUTES &&
+				!secure_installed_data_file(hostkey_path))) {
+		fputs("Could not secure the installed account or host key.\n", stderr);
+		goto done;
+	}
+	if (_wcsicmp(source_exe, installed_exe)) {
+		if (GetFileAttributesW(installed_exe) != INVALID_FILE_ATTRIBUTES) {
+			if (!CopyFileW(installed_exe, backup_exe, TRUE)) {
+				fputs("Could not back up the installed EXE.\n", stderr);
+				goto done;
+			}
+			backed_up_exe = 1;
+		}
+		copied_exe = 1;
+		if (!CopyFileW(source_exe, installed_exe, FALSE)) {
+			fputs("Could not copy the EXE to Program Files.\n", stderr);
+			goto done;
+		}
+	}
+	if (GetFileAttributesW(marker) == INVALID_FILE_ATTRIBUTES) {
+		marker_file = CreateFileW(marker, GENERIC_WRITE, 0, NULL, CREATE_NEW,
+			FILE_ATTRIBUTE_NORMAL, NULL);
+		if (marker_file == INVALID_HANDLE_VALUE) goto done;
+		CloseHandle(marker_file);
+		created_marker = 1;
+	}
+	command_line = dropbear_win_build_service_command_line(installed_exe, argc, argv);
+	if (!command_line) goto done;
+	if (service) {
+		if (!ChangeServiceConfigW(service, SERVICE_NO_CHANGE, start_type,
+				SERVICE_NO_CHANGE, command_line, NULL, NULL, NULL, NULL, NULL, NULL)) {
+			fprintf(stderr, "Could not update DropbearWin: error %lu.\n",
+				(unsigned long)GetLastError());
+			goto done;
+		}
+	} else {
+		service = CreateServiceW(manager, WIN_SETUP_NAME, WIN_SETUP_DISPLAY,
+			SERVICE_ALL_ACCESS, SERVICE_WIN32_OWN_PROCESS, start_type,
+			SERVICE_ERROR_NORMAL, command_line, NULL, NULL, NULL, NULL, NULL);
+		if (!service) {
+			fprintf(stderr, "Could not install DropbearWin: error %lu.\n",
+				(unsigned long)GetLastError());
+			goto done;
+		}
+	}
+	printf("Service installed: %ls\nEXE: %ls\nData: %s\n",
+		WIN_SETUP_NAME, installed_exe, installed_data);
+	write_uninstall_script(installed_exe);
+	result = 0;
+done:
+	if (service) CloseServiceHandle(service);
+	if (manager) CloseServiceHandle(manager);
+	if (result) {
+		if (created_marker) DeleteFileW(marker);
+		if (backed_up_exe && !CopyFileW(backup_exe, installed_exe, FALSE))
+			fputs("Could not restore the previous installed EXE.\n", stderr);
+		else if (copied_exe && !backed_up_exe) DeleteFileW(installed_exe);
+		if (created_hostkey) DeleteFileA(hostkey_path);
+		if (created_account) DeleteFileA(account_path);
+		if (created_data_dir) RemoveDirectoryA(installed_data);
+	} else {
+		clean_portable_data(source_exe, portable_data, installed_data);
+		if (_wcsicmp(source_exe, installed_exe) && !DeleteFileW(source_exe)) {
+			if (MoveFileExW(source_exe, NULL, MOVEFILE_DELAY_UNTIL_REBOOT))
+				printf("Portable EXE scheduled for removal at next restart: %ls\n", source_exe);
+			else fputs("Installed, but the portable EXE must be removed manually.\n", stderr);
+		}
+	}
+	if (backed_up_exe) DeleteFileW(backup_exe);
+	if (command_line) HeapFree(GetProcessHeap(), 0, command_line);
+	return result;
+}
+
+int dropbear_win_install_autostart(int argc, char **argv) {
 	if (!current_process_is_administrator()) {
 		if (!strcmp(argv[1], "--install-autostart-elevated")) {
 			fputs("Administrator rights are required to install the automatic Windows service.\n", stderr);
@@ -285,77 +576,26 @@ int dropbear_win_install_autostart(int argc, char **argv) {
 		}
 		return request_autostart_elevation(argc, argv);
 	}
-	/* The explicit installer can perform first-run SSH account setup, then
-	 * register the service only after configuration is valid. */
+	/* An installer invoked through SSH inherits the service's data overrides.
+	 * Installation must read the portable data beside this EXE instead. */
+	if (_putenv("DROPBEAR_WIN_DATA_DIR=") ||
+			_putenv("DROPBEAR_WIN_ACCOUNT_FILE=") ||
+			!SetEnvironmentVariableA("DROPBEAR_WIN_DATA_DIR", NULL) ||
+			!SetEnvironmentVariableA("DROPBEAR_WIN_ACCOUNT_FILE", NULL)) {
+		fputs("Could not select this EXE's portable data directory.\n", stderr);
+		return 1;
+	}
 	if (!dropbear_win_prepare()) {
 		fputs("Autostart setup stopped before the SSH account was ready.\n", stderr);
 		return 1;
 	}
-	length = GetModuleFileNameW(NULL, executable, 32768);
-	if (!length || length >= 32768) {
-		fputs("Could not read the executable path.\n", stderr);
-		return 1;
-	}
-	/* The first argument in argv + 1 is the installer switch. The service
-	 * command builder skips it and forwards only subsequent server options. */
-	command_line = dropbear_win_build_service_command_line(executable, argc - 1, argv + 1);
-	if (!command_line) {
-		fputs("Could not build the Windows service command line.\n", stderr);
-		return 1;
-	}
-	manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE);
-	if (!manager) {
-		fprintf(stderr, "Could not open the Windows service manager: error %lu.\n",
-			(unsigned long)GetLastError());
-		goto done;
-	}
-	service = OpenServiceW(manager, WIN_SETUP_NAME, SERVICE_QUERY_CONFIG | SERVICE_CHANGE_CONFIG);
-	if (service) {
-		match = service_uses_current_executable(service, executable);
-		if (match < 0) {
-			fputs("Could not inspect the existing DropbearWin service.\n", stderr);
-			goto done;
-		}
-		if (!match) {
-			fputs("A different DropbearWin service already exists; leaving it unchanged.\n", stderr);
-			goto done;
-		}
-		if (!ChangeServiceConfigW(service, SERVICE_NO_CHANGE, SERVICE_AUTO_START,
-				SERVICE_NO_CHANGE, command_line, NULL, NULL, NULL, NULL, NULL, NULL)) {
-			fprintf(stderr, "Could not enable automatic service startup: error %lu.\n",
-				(unsigned long)GetLastError());
-			goto done;
-		}
-	} else {
-		error = GetLastError();
-		if (error != ERROR_SERVICE_DOES_NOT_EXIST) {
-			fprintf(stderr, "Could not open the DropbearWin service: error %lu.\n",
-				(unsigned long)error);
-			goto done;
-		}
-		service = CreateServiceW(manager, WIN_SETUP_NAME, WIN_SETUP_DISPLAY,
-			SERVICE_ALL_ACCESS, SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START,
-			SERVICE_ERROR_NORMAL, command_line, NULL, NULL, NULL, NULL, NULL);
-		if (!service) {
-			fprintf(stderr, "Could not install the automatic Windows service: error %lu.\n",
-				(unsigned long)GetLastError());
-			goto done;
-		}
-	}
-	printf("Autostart enabled: %ls (Automatic). Start now with: sc start %ls\n",
-		WIN_SETUP_NAME, WIN_SETUP_NAME);
-	write_uninstall_script();
-	result = 0;
-done:
-	if (service) CloseServiceHandle(service);
-	if (manager) CloseServiceHandle(manager);
-	HeapFree(GetProcessHeap(), 0, command_line);
-	return result;
+	/* argv + 1 starts with the installer switch, which the command builder skips. */
+	return install_registered_service(argc - 1, argv + 1, SERVICE_AUTO_START);
 }
 
 void dropbear_win_maybe_register_service(int argc, char **argv) {
 	SC_HANDLE manager, service;
-	wchar_t executable[32768], *command_line;
+	wchar_t executable[32768];
 	if (service_mode || !_isatty(_fileno(stdin))) return;
 	if (!GetModuleFileNameW(NULL, executable, 32768)) return;
 
@@ -383,7 +623,7 @@ void dropbear_win_maybe_register_service(int argc, char **argv) {
 			free(config);
 		}
 		CloseServiceHandle(service);
-		if (same_binary) write_uninstall_script();
+		if (same_binary) write_uninstall_script(executable);
 		else fprintf(stderr,
 			"A different service named \"%ls\" already exists; leaving it untouched.\n",
 			WIN_SETUP_NAME);
@@ -395,39 +635,12 @@ void dropbear_win_maybe_register_service(int argc, char **argv) {
 	fflush(stdout);
 	if (!read_yes_answer()) return;
 
-	command_line = dropbear_win_build_service_command_line(executable, argc, argv);
-	if (!command_line) {
-		fputs("Service registration failed: out of memory.\n", stderr);
-		return;
+	if (install_registered_service(argc, argv, SERVICE_AUTO_START)) {
+		fputs("Service registration failed; portable EXE and data were preserved.\n", stderr);
+		exit(1);
 	}
-	manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CREATE_SERVICE);
-	if (!manager) {
-		DWORD error = GetLastError();
-		fprintf(stderr, "Service registration failed: Windows error %lu.\n",
-			(unsigned long)error);
-		if (error == ERROR_ACCESS_DENIED)
-			fputs("Administrator rights are required; run this console as administrator and retry.\n",
-				stdout);
-		HeapFree(GetProcessHeap(), 0, command_line);
-		return;
-	}
-	service = CreateServiceW(manager, WIN_SETUP_NAME, WIN_SETUP_DISPLAY,
-		SERVICE_ALL_ACCESS, SERVICE_WIN32_OWN_PROCESS, SERVICE_DEMAND_START,
-		SERVICE_ERROR_NORMAL, command_line, NULL, NULL, NULL, NULL, NULL);
-	CloseServiceHandle(manager);
-	if (!service) {
-		DWORD error = GetLastError();
-		fprintf(stderr, "Service registration failed: Windows error %lu.\n",
-			(unsigned long)error);
-		if (error == ERROR_ACCESS_DENIED)
-			fputs("Administrator rights are required; run this console as administrator and retry.\n",
-				stdout);
-	} else {
-		CloseServiceHandle(service);
-		printf("Service registered: %ls (start with: net start %ls)\n",
-			WIN_SETUP_NAME, WIN_SETUP_NAME);
-		write_uninstall_script();
-	}
-	HeapFree(GetProcessHeap(), 0, command_line);
+	/* This process still has portable paths cached. The installed service starts
+	 * as a fresh process and reads its migrated ProgramData files. */
+	exit(0);
 }
 #endif

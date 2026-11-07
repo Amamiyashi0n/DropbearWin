@@ -71,8 +71,8 @@ SHA-256。部署时使用清单中的 EXE；`dist/` 不保留旧版 EXE。
 首次运行会询问自定义 SSH 用户名和密码，随后默认监听 `0.0.0.0:52222`。
 **权限提醒：此 SSH 账号有意独立于 Windows 用户数据库；认证成功不会切换 Windows
 访问令牌。远程命令和文件传输继承启动 EXE 的 Windows 身份；注册为默认服务时，
-该身份是 LocalSystem。** x64 与 x86 程序在同一目录运行时共用同一个
-`dropbear-win-data`，因此账号配置和 ED25519 主机身份可跨架构复用。
+该身份是 LocalSystem。** 绿色版直接运行时，数据位于 EXE 旁的
+`dropbear-win-data`；同一目录中的 x64 与 x86 程序可共用账号和主机密钥。
 
 监听成功后，控制台会显示 `[OK]`、`RUNNING`、绑定地址、实际可访问的本机 IPv4
 地址、SSH 连接命令、认证用户名、Shell、PID 和数据目录。端口占用等监听错误不会
@@ -329,7 +329,7 @@ python tests/windows_stress.py dist/dropbear-win-x86.exe build/stress-x86.json
 
 ### 开机自动启动
 
-将 EXE 放在仅管理员可写的固定目录后运行：
+可从任意临时目录运行：
 
 ```powershell
 .\dropbear-win-x64.exe --install-autostart
@@ -337,20 +337,22 @@ python tests/windows_stress.py dist/dropbear-win-x86.exe build/stress-x86.json
 ```
 
 32 位 Windows 改用 `dropbear-win-x86.exe`。首次运行会申请管理员权限并设置本项目的
-SSH 账号，然后创建自动启动的 Windows 服务 `DropbearWin`。如果同一 EXE 已注册为按需
-启动的服务，该命令会把它改为自动启动，并更新后续的服务参数；同名服务指向其他 EXE
-时不改动。安装命令只配置服务，不立即启动；可运行 `sc start DropbearWin` 启动，
-用 `sc qc DropbearWin` 核对 `AUTO_START`。
+SSH 账号，然后将 EXE 复制到系统盘的 `Program Files\DropbearWin`，账号与主机密钥
+迁移到 `%ProgramData%\DropbearWin`，注册自动启动服务 `DropbearWin` 指向安装副本。
+复制及注册成功后清理原 EXE 旁的便携数据；仍被当前进程使用的原 EXE 会安排在下次
+重启时删除。若服务已存在，先停止服务再重新安装；目标位置已有不同账号或主机密钥
+时安装会中止并保留两份数据。安装命令不立即启动服务；可运行
+`sc start DropbearWin` 启动，用 `sc qc DropbearWin` 核对 `AUTO_START`。
 
 Windows 不会永久记住一次 UAC 同意：以后手动启动 EXE 时仍可能提示；开机时由 SCM
 直接启动已注册的服务。默认服务以 LocalSystem 身份运行，SSH 登录后的命令和文件
-传输继承该身份。删除服务可使用 EXE 目录中的 `uninstall-dropbear-service.cmd`。
+传输继承该身份。删除服务可使用安装目录中的 `uninstall-dropbear-service.cmd`。
 
 直接在控制台运行 EXE(不需要任何参数)时，程序会在账号就绪后询问是否把当前
-程序注册为 Windows 服务 `DropbearWin`：回答 `y` 即完成注册，服务以按需启动
-方式写入 SCM，命令行会带上本次启动的原始参数（如 `-p`），同时在 EXE 目录生成
-卸载脚本 `uninstall-dropbear-service.cmd`（停止并删除服务；`account.conf` 与
-主机密钥保留）。回答其他值或直接回车则跳过，继续以控制台方式运行。注册一次
+程序注册为 Windows 服务 `DropbearWin`：回答 `y` 会执行同样的 C 盘迁移并注册
+自动启动服务，随后退出当前便携进程；安装目录生成卸载脚本
+`uninstall-dropbear-service.cmd`（停止并删除服务；安装后的账号与主机密钥保留）。
+回答其他值或直接回车则跳过，继续以绿色版控制台方式运行。注册一次
 之后，后续启动检测到服务已指向本程序，不再重复询问；服务名已被其他程序占用
 时会明确提示且不改动现有服务。
 
@@ -392,9 +394,9 @@ scp -O -P 52222 .\local.bin user@192.168.1.10:C:/Temp/remote.bin
 远端 Windows 路径建议使用正斜杠，例如 `C:/Temp/file.bin`。包含空格或中文的路径
 优先使用新版默认模式；传统 `scp -O` 仍受客户端远端 shell 引用规则影响。
 
-首次运行产生的账户、ED25519 主机密钥和 PID 文件保存在 EXE 旁的
-`dropbear-win-data` 目录；程序本体仍是单个 EXE。停止服务并删除其中的
-`account.conf`，下次启动时会重新进入账户设置。
+绿色版运行时，账户、ED25519 主机密钥和 PID 文件保存在 EXE 旁的
+`dropbear-win-data`；内置安装完成后改用 `%ProgramData%\DropbearWin`。
+停止服务并删除当前数据目录中的 `account.conf`，下次启动时会重新进入账户设置。
 
 每次启动都会先执行 RFC 8032 ED25519 已知向量自检，再验证主机密钥是否可解析，
 以及私钥与公钥是否确实匹配。若升级前的旧版本曾留下损坏或无法正确签名的主机
