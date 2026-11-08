@@ -49,14 +49,36 @@ stdio 无法交互询问密码。不要把真实密码提交到仓库。
 | --- | --- | --- |
 | Tool | `dropbear_context` | 实时 Windows 身份、令牌、Session、Shell、能力 JSON |
 | Tool | `dropbear_guide` | 目标 EXE 内嵌 Markdown 指南 |
+| Tool | `dropbear_manifest` | 发现真实 Skill/MCP 文件路径，并加载 SHA-256 验证后的内容 |
 | Tool | `dropbear_sessions` | 查询 Windows Session，返回原始字节和解码文本 |
 | Tool | `dropbear_run_command` | 按当前 CMD/PowerShell 语法执行命令 |
 | Tool | `dropbear_exec` | 通过 DBX2 执行 EXE、参数数组、cwd、环境及二进制 stdin |
 | Resource | `dropbear://context` | JSON 格式的实时上下文 |
 | Resource | `dropbear://guide` | Markdown 格式的远程指南 |
+| Resource | `dropbear://manifest` | Skill/MCP 文件路径与 SHA-256 标识 |
 | Prompt | `dropbear_onboarding` | 将实时上下文与指南载入当前任务 |
 
-Agent 先调用 `dropbear_context` 和 `dropbear_guide`，再按任务使用执行工具。
+SSH 认证阶段默认发送 Agent discovery Banner，非交互 exec 和 SFTP 同样收到，
+OpenSSH 客户端显示在 stderr；不会把指引混入命令的 stdout、SFTP 或 DBX2 数据流。
+SDK 客户端可能需要读取认证 Banner API（例如 Paramiko `Transport.get_banner()`）。
+静默模式和部分客户端可能隐藏此消息。
+
+服务启动时在数据目录生成 `SKILL.md` 和 `mcp.json`（安装版通常为
+`C:\ProgramData\DropbearWin`，绿色版为 EXE 旁 `dropbear-win-data`）。这些文件由 EXE
+维护，随版本更新覆盖，不供用户手工编辑。认证 Banner 给出路径和发现命令：
+
+```sh
+ssh user@host __dropbear_win_manifest__
+ssh user@host __dropbear_win_skill__
+ssh user@host __dropbear_win_mcp__
+```
+
+Manifest 给出 `skill_sha256`、`mcp_sha256` 和文件路径。每次连接比较 SHA-256，
+变化时重读对应文件。可通过特殊 exec 命令或 SFTP 获取相同原始字节；自动生成文件
+失败时仍可使用内嵌命令。MCP 清单描述连接端 stdio 桥接功能，不代表目标机额外运行
+MCP 网络端口，也不会自动安装客户端组件。
+
+Agent 先调用 `dropbear_manifest`、`dropbear_context` 和 `dropbear_guide`，再按任务使用执行工具。
 MCP 初始化的 instructions 及 Skill 都声明这一发现流程；客户端决定何时读取资源或
 提示词，因此不能保证所有 MCP 客户端自动把资源注入上下文。
 

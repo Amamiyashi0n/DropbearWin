@@ -406,7 +406,8 @@ static void clean_portable_data(const wchar_t *source_exe, const char *source_di
 		const char *target_dir) {
 	char portable[MAX_PATH], source[MAX_PATH];
 	wchar_t executable[32768], *slash;
-	const char *names[] = { "account.conf", "hostkey_ed25519", "dropbear.pid", "service.log" };
+	const char *names[] = { "account.conf", "hostkey_ed25519", "dropbear.pid", "service.log",
+		"SKILL.md", "mcp.json", "SKILL.md.tmp", "mcp.json.tmp" };
 	size_t i;
 	if (!_stricmp(source_dir, target_dir) || wcslen(source_exe) >= 32768) return;
 	wcscpy(executable, source_exe);
@@ -738,7 +739,8 @@ static int remove_installed_file(const wchar_t *path, int *restart_required) {
 }
 
 static int remove_installed_data(const char *directory) {
-	const char *names[] = { "account.conf", "hostkey_ed25519", "dropbear.pid", "service.log" };
+	const char *names[] = { "account.conf", "hostkey_ed25519", "dropbear.pid", "service.log",
+		"SKILL.md", "mcp.json", "SKILL.md.tmp", "mcp.json.tmp" };
 	char path[MAX_PATH];
 	size_t i;
 	for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {

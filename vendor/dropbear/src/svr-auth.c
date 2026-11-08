@@ -89,6 +89,18 @@ void recv_msg_userauth_request() {
 	}
 
 	/* send the banner if it exists, it will only exist once */
+#ifdef DROPBEAR_WIN32_NATIVE
+	if (!ses.authstate.agent_banner_sent) {
+		char discovery[2048];
+		buffer *banner;
+		dropbear_win_agent_banner(discovery, sizeof(discovery));
+		banner = buf_new(strlen(discovery));
+		buf_putbytes(banner, (const unsigned char *)discovery, strlen(discovery));
+		send_msg_userauth_banner(banner);
+		buf_free(banner);
+		ses.authstate.agent_banner_sent = 1;
+	}
+#endif
 	if (svr_opts.banner) {
 		send_msg_userauth_banner(svr_opts.banner);
 		buf_free(svr_opts.banner);

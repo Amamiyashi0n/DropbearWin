@@ -10,7 +10,14 @@ the connection environment or client secret store; do not put them into this ski
 
 ## Discover before operating
 
-With the `dropbear-win` MCP server, call `dropbear_context` and `dropbear_guide`.
+SSH authentication publishes an Agent discovery banner, including for non-PTY
+commands and SFTP. It points to the actual remote `SKILL.md` and `mcp.json`.
+Some SDKs expose this through their authentication-banner API rather than text.
+
+With the `dropbear-win` MCP server, call `dropbear_manifest`, `dropbear_context` and `dropbear_guide`.
+The manifest tool loads remote Skill/MCP content and verifies SHA-256. On each
+connection compare its `skill_sha256` and `mcp_sha256` with the loaded version;
+reload changed content. Never reuse a Session/identity snapshot as live state.
 The same information is exposed as `dropbear://context` and `dropbear://guide`
 resources; `dropbear_onboarding` loads both as an MCP prompt.
 
@@ -18,6 +25,9 @@ Without MCP, run from the SSH client:
 
 ```sh
 ssh user@host __dropbear_win_probe__
+ssh user@host __dropbear_win_manifest__
+ssh user@host __dropbear_win_skill__
+ssh user@host __dropbear_win_mcp__
 ssh user@host __dropbear_win_guide__
 ```
 

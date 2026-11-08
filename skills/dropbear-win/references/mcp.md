@@ -29,6 +29,7 @@ only for this DropbearWin build; local ssh-agent and key-file discovery are disa
 | --- | --- |
 | `dropbear_context` | No arguments; live probe JSON |
 | `dropbear_guide` | No arguments; embedded Markdown |
+| `dropbear_manifest` | No arguments; manifest plus SHA-256-verified remote Skill/MCP content |
 | `dropbear_sessions` | No arguments; `query session` result and security context |
 | `dropbear_run_command` | `command`, optional `timeout`, `encoding` |
 | `dropbear_exec` | `program`, optional `args`, `cwd`, `env`, `stdin_base64`, `timeout`, `encoding` |
@@ -42,7 +43,8 @@ The bridge fetches the live probe before each execution. Timeouts are limited
 to 300 seconds, combined output to 1 MiB, and structured stdin to 256 KiB.
 For larger output/data, use files and SFTP separately.
 
-Resources: `dropbear://context` (JSON), `dropbear://guide` (Markdown).
+Resources: `dropbear://context` (JSON), `dropbear://guide` (Markdown),
+`dropbear://manifest` (file paths and SHA-256 tracking).
 Prompt: `dropbear_onboarding` (live context plus guide).
 
 The MCP host controls loading resources/prompts and approval of tools. Installing

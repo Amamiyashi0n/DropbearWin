@@ -128,6 +128,9 @@ struct AuthState {
 	unsigned int authdone; /* 0 if we haven't authed, 1 if we have. Applies for
 							  client and server (though has differing 
 							  meanings). */
+#ifdef DROPBEAR_WIN32_NATIVE
+	unsigned int agent_banner_sent;
+#endif
 
 	unsigned int perm_warn; /* Server only, set if bad permissions on 
 							   ~/.ssh/authorized_keys have already been

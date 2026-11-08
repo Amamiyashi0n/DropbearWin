@@ -191,6 +191,8 @@ static void main_noinetd(int argc, char ** argv, const char* multipath) {
 		if (strcmp(svr_opts.ports[i], DROPBEAR_DEFPORT) == 0 && !dropbear_win_startup_lock())
 			dropbear_exit("Port %s startup lock failed", DROPBEAR_DEFPORT);
 	}
+	if (!dropbear_win_agent_publish())
+		dropbear_log(LOG_WARNING, "Agent files could not be written; use embedded SSH discovery commands");
 #endif
 	listensockcount = listensockets(listensocks, MAX_LISTEN_ADDR, &maxsock);
 	if (listensockcount == 0)

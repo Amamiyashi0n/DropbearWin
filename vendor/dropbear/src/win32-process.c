@@ -1011,11 +1011,16 @@ int dropbear_win_spawn_shell(const char *command, const char *ssh_user,
 
 	if (command && (!strcmp(command, "__dropbear_win_sftp__") ||
 		!strcmp(command, "__dropbear_win_exec__") || !strcmp(command, "__dropbear_win_probe__") ||
+		!strcmp(command, "__dropbear_win_manifest__") || !strcmp(command, "__dropbear_win_skill__") ||
+		!strcmp(command, "__dropbear_win_mcp__") ||
 		!strcmp(command, "__dropbear_win_guide__"))) {
 		if (!GetModuleFileNameW(NULL, executable, MAX_PATH)) goto fail;
 		application = executable;
 		command_line = make_internal_command_line(executable,
 			!strcmp(command, "__dropbear_win_probe__") ? L"--dropbear-win-probe" :
+			!strcmp(command, "__dropbear_win_manifest__") ? L"--dropbear-win-manifest" :
+			!strcmp(command, "__dropbear_win_skill__") ? L"--dropbear-win-skill" :
+			!strcmp(command, "__dropbear_win_mcp__") ? L"--dropbear-win-mcp" :
 			!strcmp(command, "__dropbear_win_guide__") ? L"--dropbear-win-guide" :
 			!strcmp(command, "__dropbear_win_exec__") ? L"--dropbear-win-exec" : L"--dropbear-win-sftp", NULL);
 		internal_mode = 1;

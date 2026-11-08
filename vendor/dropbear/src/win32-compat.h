@@ -239,6 +239,8 @@ void dropbear_win_process_cleanup(void);
 void dropbear_win_resource_summary(char *output, size_t size);
 void dropbear_win_runtime_security(char *identity, size_t identity_size,
 	char *token_text, size_t token_size, DWORD *session_id);
+int dropbear_win_agent_publish(void);
+void dropbear_win_agent_banner(char *output, size_t size);
 extern int dropbear_win_takeover_enabled;
 int dropbear_win_bind_listener(int fd, const struct sockaddr *address, int length);
 int dropbear_win_startup_lock(void);

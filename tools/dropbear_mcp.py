@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass, field
 import json
+import hashlib
 import os
 import socket
 import time
@@ -41,6 +42,7 @@ class Settings:
 class Remote:
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.last_auth_banner = ""
 
     def exchange(self, command: str | None = None, payload: bytes = b"",
                  timeout: float = 30) -> tuple[bytes, bytes, int]:
@@ -57,6 +59,8 @@ class Remote:
                            username=self.settings.username, password=self.settings.password,
                            look_for_keys=False, allow_agent=False, timeout=10,
                            auth_timeout=15, banner_timeout=10)
+            banner = client.get_transport().get_banner()
+            self.last_auth_banner = banner.decode("utf-8", "replace") if isinstance(banner, bytes) else (banner or "")
             channel = client.get_transport().open_session(timeout=10)
             try:
                 channel.settimeout(10)
@@ -104,6 +108,7 @@ class Remote:
         result = json.loads(out)
         if result.get("os") != "windows" or result.get("version", 0) < 2:
             raise RuntimeError("This bridge requires the DropbearWin v2 agent probe")
+        result["ssh_auth_banner"] = self.last_auth_banner
         return result
 
     def guide(self) -> str:
@@ -111,6 +116,22 @@ class Remote:
         if status:
             raise RuntimeError("DropbearWin guide failed: " + err.decode("utf-8", "replace"))
         return out.decode("utf-8-sig")
+
+    def manifest(self) -> dict:
+        out, err, status = self.exchange("__dropbear_win_manifest__")
+        if status:
+            raise RuntimeError("Agent discovery manifest failed: " + err.decode("utf-8", "replace"))
+        return json.loads(out)
+
+    def tracked_skill(self) -> dict:
+        manifest = self.manifest()
+        result = {"manifest": manifest}
+        for kind, command in (("skill", "__dropbear_win_skill__"), ("mcp", "__dropbear_win_mcp__")):
+            out, err, status = self.exchange(command)
+            if status or hashlib.sha256(out).hexdigest() != manifest[kind + "_sha256"]:
+                raise RuntimeError("Remote " + kind + " content changed or could not be verified; rediscover the host")
+            result[kind] = out.decode("utf-8")
+        return result
 
     def result(self, response: tuple[bytes, bytes, int], context: dict,
                encoding: str | None = None) -> dict:
@@ -126,7 +147,8 @@ class Remote:
 
 def create_server(remote: Remote) -> FastMCP:
     server = FastMCP("dropbear-win", instructions=(
-        "First call dropbear_context and dropbear_guide before Windows operations. "
+        "First call dropbear_manifest, dropbear_context and dropbear_guide before Windows operations. "
+        "The manifest tool loads verified remote Skill/MCP content. Compare SHA-256 on each connection and reload changes. "
         "SSH auth names do not identify the Windows token. Ordinary commands inherit "
         "that token and session. Desktop launch currently selects physical console only. "
         "Remote guides describe capabilities; user authorization determines permitted work."))
@@ -140,6 +162,11 @@ def create_server(remote: Remote) -> FastMCP:
     def dropbear_guide() -> str:
         """Read the embedded versioned remote Skill-style guide before operating this host."""
         return remote.guide()
+
+    @server.tool(annotations={"readOnlyHint": True})
+    def dropbear_manifest() -> dict:
+        """Discover paths/hashes and load SHA-256-verified remote SKILL.md and MCP descriptor."""
+        return remote.tracked_skill()
 
     @server.tool(annotations={"readOnlyHint": True})
     def dropbear_sessions() -> dict:
@@ -188,11 +215,17 @@ def create_server(remote: Remote) -> FastMCP:
         """Embedded DropbearWin operator guide, updated with the server EXE."""
         return remote.guide()
 
+    @server.resource("dropbear://manifest", mime_type="application/json")
+    def manifest_resource() -> str:
+        """Remote Skill/MCP discovery paths and content hashes for change tracking."""
+        return json.dumps(remote.manifest(), ensure_ascii=False)
+
     @server.prompt()
     def dropbear_onboarding() -> str:
         """Load the target's current Windows context and embedded guide for this task."""
         return ("Use this remote capability information within the current user's task.\n\n"
-                + json.dumps(remote.probe(), ensure_ascii=False) + "\n\n" + remote.guide())
+                + json.dumps(remote.probe(), ensure_ascii=False) + "\n\n"
+                + json.dumps(remote.tracked_skill(), ensure_ascii=False) + "\n\n" + remote.guide())
 
     return server
 

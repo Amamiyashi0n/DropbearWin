@@ -66,6 +66,20 @@ def run(executable, backend):
                         time.sleep(.1)
                 else:
                     raise RuntimeError("server startup timed out")
+                discovery = client.get_transport().get_banner()
+                assert discovery and b"DropbearWin Agent discovery" in discovery, discovery
+                manifest_bytes, err, status = execute(client, "__dropbear_win_manifest__")
+                assert status == 0 and not err, (manifest_bytes, err, status)
+                manifest = json.loads(manifest_bytes)
+                for command, key, filename in (
+                    ("__dropbear_win_skill__", "skill_sha256", "SKILL.md"),
+                    ("__dropbear_win_mcp__", "mcp_sha256", "mcp.json")):
+                    content, err, status = execute(client, command)
+                    assert status == 0 and not err, (content, err, status)
+                    assert hashlib.sha256(content).hexdigest() == manifest[key]
+                    with client.open_sftp() as sftp:
+                        with sftp.file(str(directory / filename).replace("\\", "/"), "rb") as f:
+                            assert f.read() == content
                 first_snapshot = None
                 for pty in (False, True):
                     welcome = client.get_transport().open_session(timeout=15)

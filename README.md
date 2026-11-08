@@ -192,9 +192,14 @@ $env:DROPBEAR_WIN_SHELL = 'powershell'
 .\dropbear-win-x64.exe
 ```
 
-Agent 首次连接应先读取内嵌指南，再执行结构化探测，并根据 `shell` 决定语法：
+SSH 连接时默认通过认证 Banner 公布 Agent 发现入口，非交互 exec/SFTP 也可收到，
+命令 stdout 保持原样。Agent 每次连接应检查 Skill/MCP 文件指纹，再读取实时探测，
+并根据 `shell` 决定语法：
 
 ```text
+ssh -p 22 user@host __dropbear_win_manifest__
+ssh -p 22 user@host __dropbear_win_skill__
+ssh -p 22 user@host __dropbear_win_mcp__
 ssh -p 22 user@host __dropbear_win_guide__
 ssh -p 22 user@host __dropbear_win_probe__
 ```
@@ -204,6 +209,10 @@ ssh -p 22 user@host __dropbear_win_probe__
 规则、桌面启动边界及安全注意事项。指南嵌入 EXE，与服务版本一同更新。登录 Banner
 会公布该入口，但普通 SSH 协议不会强制客户端自动读取；Agent 或连接包装器应在规划
 Windows 工作前主动执行它。
+
+真实的 `SKILL.md` 与 `mcp.json` 在服务启动时生成到数据目录，安装版通常位于
+`C:\ProgramData\DropbearWin`。`__dropbear_win_manifest__` 返回文件路径及 SHA-256，
+Agent 可据此跟踪内容变化并重新加载；特殊读取命令与 SFTP 返回相同内容。
 
 `__dropbear_win_probe__` 返回版本化 JSON，包含 `os=windows`、`shell`、`pty=false`、
 `transport=pipes`、`exec_encoding=raw`、`sftp=true`、`exec_subsystem=dropbear-exec-v1`，
