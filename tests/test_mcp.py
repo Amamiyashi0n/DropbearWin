@@ -20,6 +20,13 @@ import dropbear_mcp
 
 
 class FixtureRemote(Remote):
+    def session_display(self, session_id, expected_user=None, width=None, height=None,
+                        device=None, refresh_hz=None, test_only=False):
+        if width is None:
+            return {"session_id": session_id, "displays": [{"current": {"width": 1600, "height": 900}}]}
+        return {"session_id": session_id, "applied": not test_only, "verified": not test_only,
+                "test_code": 0, "after": {"width": width, "height": height}}
+
     def session_screenshot(self, session_id, expected_user=None):
         return base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5v8AAAAASUVORK5CYII="), {
             "session_id": session_id, "width": 1, "height": 1, "windows_user": "host\\agent"}
@@ -57,9 +64,14 @@ class MCPContract(unittest.IsolatedAsyncioTestCase):
                 listed = await client.list_tools()
                 tools = {tool.name: tool for tool in listed.tools}
                 self.assertEqual(set(tools), {"dropbear_context", "dropbear_guide",
-                    "dropbear_manifest", "dropbear_sessions", "dropbear_run_command", "dropbear_exec", "dropbear_desktop_launch", "dropbear_session_screenshot"})
+                    "dropbear_manifest", "dropbear_sessions", "dropbear_run_command", "dropbear_exec", "dropbear_desktop_launch", "dropbear_session_screenshot", "dropbear_session_display", "dropbear_session_set_resolution"})
                 self.assertTrue(tools["dropbear_context"].annotations.readOnlyHint)
                 self.assertTrue(tools["dropbear_exec"].annotations.destructiveHint)
+                display = await client.call_tool("dropbear_session_display", {"session_id": 3})
+                self.assertEqual(json.loads(display.content[0].text)["displays"][0]["current"]["width"], 1600)
+                tested = await client.call_tool("dropbear_session_set_resolution", {
+                    "session_id": 3, "width": 1280, "height": 720, "test_only": True})
+                self.assertFalse(json.loads(tested.content[0].text)["applied"])
                 shot = await client.call_tool("dropbear_session_screenshot", {"session_id": 3, "expected_user": "agent"})
                 self.assertFalse(shot.isError)
                 self.assertEqual(shot.content[1].type, "image")
@@ -88,6 +100,16 @@ class MCPContract(unittest.IsolatedAsyncioTestCase):
 
 
 class TransportTests(unittest.TestCase):
+    def test_invalid_display_inputs_do_not_connect(self):
+        remote = Remote(Settings("host", "user"))
+        for kwargs in ({"session_id": 0}, {"session_id": 3, "width": 1280},
+                       {"session_id": 3, "width": 1, "height": 720},
+                       {"session_id": 3, "width": 1280, "height": 720, "refresh_hz": 0}):
+            with patch.object(remote, "connect") as connect:
+                with self.assertRaises(ValueError):
+                    remote.session_display(**kwargs)
+                connect.assert_not_called()
+
     def test_changed_skill_is_rejected(self):
         remote = FixtureRemote(Settings("host", "user"))
         with patch.object(remote, "exchange", return_value=(b"changed", b"", 0)):

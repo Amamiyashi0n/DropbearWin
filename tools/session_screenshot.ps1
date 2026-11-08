@@ -36,6 +36,7 @@ public class DropbearCaptureDesktop {
         session_id = [Diagnostics.Process]::GetCurrentProcess().SessionId
         windows_user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
         desktop = $desktop; width = $bounds.Width; height = $bounds.Height
+        capture_mode = 'virtual_desktop'
         left = $bounds.X; top = $bounds.Y
     }
 } catch {

@@ -78,9 +78,15 @@ users are rejected. This creates no new login and does not unlock the desktop.
 Use MCP `dropbear_desktop_launch` with `session_id` and `expected_user` where available.
 Verify process identity, Session ID and UI readiness separately after launch.
 Use `dropbear_session_screenshot(session_id=3, expected_user="agent")` to capture
-that user's desktop as an MCP PNG image. It returns actual identity/session and
+that user's full virtual desktop (all monitors) as an MCP PNG image. It returns actual identity/session and
 dimensions, uses a short user-token worker and cleans its temporary capture files.
 Locked or unavailable input desktops fail; this tool does not unlock a session.
+Use `dropbear_session_display` to read the selected session's displays, current
+mode and available modes. `dropbear_session_set_resolution` accepts width/height,
+optional device/refresh rate and `test_only`. Check `applied`, `verified` and
+`error`; a driver success code alone does not prove resolution changed.
+RDP drivers may require resizing/reconnecting the RDP client (`client_resize_required`).
+Changes are applied dynamically without writing display settings to the registry.
 For an existing worker in a user session, keep its commands and UI operations
 in that session; SSH can coordinate through the worker's configured interface.
 

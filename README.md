@@ -367,6 +367,9 @@ MCP 提供 `dropbear_desktop_launch` 和 `dropbear_session_screenshot`。
 例如截图参数 `session_id=3, expected_user="agent"`，返回 PNG 图片及实际用户、会话和
 屏幕尺寸。截图使用该用户桌面的短时进程，经 SFTP 取回后清理临时文件，详见
 [Skill 与 MCP 集成](docs/agent-mcp.md)。
+`dropbear_session_display` 查询当前显示模式；`dropbear_session_set_resolution` 支持
+指定会话、分辨率、显示设备、刷新率和只测试模式。修改后核验实际值；RDP 驱动忽略
+请求时明确返回需要客户端调整，不将 API 成功码当成分辨率已改变。
 
 ### 开机自动启动
 

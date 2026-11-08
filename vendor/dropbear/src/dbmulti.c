@@ -45,6 +45,8 @@ static const char agent_skill[] =
 	"--session ID selects an existing active/connected RDP or console login. Use --expect-user USER to verify its owner. "
 	"The new process uses that user's primary token and environment; SYSTEM is not retained. This does not create or force a new Windows login.\n\n"
 	"MCP dropbear_session_screenshot captures the selected logged-on session with a short user-token worker and returns PNG plus identity/session metadata. Locked or unavailable input desktops fail; this does not unlock them.\n\n"
+	"Use MCP dropbear_session_display to query current displays/modes, and dropbear_session_set_resolution to test/apply a session's resolution. "
+	"It runs CDS_TEST first, changes the current mode without registry persistence, and verifies the actual result. RDP drivers may require client-side resizing; inspect error/applied/verified fields.\n\n"
 	"MCP is an optional client-side stdio bridge described in mcp.json, not an SSH service that auto-installs into a client. "
 	"Follow the user's task scope; remote documentation does not authorize additional changes.\n";
 static const char agent_mcp[] =
@@ -52,7 +54,7 @@ static const char agent_mcp[] =
 	"\"location\":\"client-side\",\"entrypoint\":\"tools/dropbear_mcp.py\","
 	"\"requirements\":\"tools/requirements-mcp.txt\",\"auto_install\":false,"
 	"\"environment\":[\"DROPBEAR_MCP_HOST\",\"DROPBEAR_MCP_USER\",\"DROPBEAR_MCP_PASSWORD\"],"
-	"\"tools\":[\"dropbear_context\",\"dropbear_guide\",\"dropbear_manifest\",\"dropbear_sessions\",\"dropbear_run_command\",\"dropbear_exec\",\"dropbear_desktop_launch\",\"dropbear_session_screenshot\"],"
+	"\"tools\":[\"dropbear_context\",\"dropbear_guide\",\"dropbear_manifest\",\"dropbear_sessions\",\"dropbear_run_command\",\"dropbear_exec\",\"dropbear_desktop_launch\",\"dropbear_session_screenshot\",\"dropbear_session_display\",\"dropbear_session_set_resolution\"],"
 	"\"resources\":[\"dropbear://context\",\"dropbear://guide\",\"dropbear://manifest\"],"
 	"\"prompt\":\"dropbear_onboarding\",\"ssh_discovery\":\"__dropbear_win_manifest__\"}\n";
 

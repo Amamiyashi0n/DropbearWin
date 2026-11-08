@@ -35,6 +35,14 @@ only for this DropbearWin build; local ssh-agent and key-file discovery are disa
 | `dropbear_exec` | `program`, optional `args`, `cwd`, `env`, `stdin_base64`, `timeout`, `encoding` |
 | `dropbear_desktop_launch` | `program`, optional `args`, `session_id`, `expected_user`; launches using the selected logged-on user's token |
 | `dropbear_session_screenshot` | `session_id`, optional `expected_user`; PNG image and actual user/session/dimensions |
+| `dropbear_session_display` | `session_id`, optional `expected_user`; displays/current and driver-advertised modes |
+| `dropbear_session_set_resolution` | `session_id`, `width`, `height`; optional `expected_user`, `device`, `refresh_hz`, `test_only` |
+
+Display setting results include native test/change codes, before/after mode,
+`applied`, `verified`, and any `error`. `test_only=true` never applies a mode.
+For RDP a reported `client_resize_required` means the client must resize/reconnect;
+do not describe the requested resolution as achieved. No display registry settings
+are written by this tool.
 
 Execution returns `exit_code`, `stdout`, `stderr`, `stdout_base64`,
 `stderr_base64`, `encoding`, and `security_context`. Nonzero remote exit codes

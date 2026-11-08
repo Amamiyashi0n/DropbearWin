@@ -55,6 +55,8 @@ stdio 无法交互询问密码。不要把真实密码提交到仓库。
 | Tool | `dropbear_exec` | 通过 DBX2 执行 EXE、参数数组、cwd、环境及二进制 stdin |
 | Tool | `dropbear_desktop_launch` | 在指定的已登录控制台/RDP 会话启动独立程序，可核验用户名 |
 | Tool | `dropbear_session_screenshot` | 返回指定 Session 的 PNG 图片及真实用户、Session、尺寸 |
+| Tool | `dropbear_session_display` | 查询指定会话的显示设备、当前分辨率和驱动公布的模式 |
+| Tool | `dropbear_session_set_resolution` | 预检查并修改指定会话分辨率，重新读取实际值验证 |
 | Resource | `dropbear://context` | JSON 格式的实时上下文 |
 | Resource | `dropbear://guide` | Markdown 格式的远程指南 |
 | Resource | `dropbear://manifest` | Skill/MCP 文件路径与 SHA-256 标识 |
@@ -115,10 +117,28 @@ MCP 初始化的 instructions 及 Skill 都声明这一发现流程；客户端�
 截图示例：`dropbear_session_screenshot(session_id=3, expected_user="agent")`。
 客户端桥接器使用随附的 `tools/session_screenshot.ps1`，通过新 launcher 在所选
 用户桌面创建短时隐藏截图进程；PNG 经 SFTP 传回，作为 MCP `image/png` 内容返回，
-另附实际 Windows 用户、Session、桌面名及虚拟屏幕尺寸/偏移。读取后删除唯一命名的
+另附实际 Windows 用户、Session、桌面名及虚拟屏幕尺寸/偏移。
+截图默认覆盖整个 Session 的虚拟桌面（包含全部显示器），不是只截前台窗口；
+返回 `capture_mode=virtual_desktop`。读取后删除唯一命名的
 临时文件，不影响其他截图。依赖目标 Windows PowerShell、.NET System.Drawing。
 输入桌面锁定、会话不可用或采集失败会报错。PNG 上限 16 MiB，虚拟桌面上限 4000 万
 像素。输出是当前可采集桌面的实际像素；工具不解锁、不建立 RDP 登录。
+
+分辨率操作示例：
+
+```text
+dropbear_session_display(session_id=3, expected_user="agent")
+dropbear_session_set_resolution(session_id=3, expected_user="agent", width=1920, height=1080, test_only=true)
+dropbear_session_set_resolution(session_id=3, expected_user="agent", width=1920, height=1080)
+```
+
+默认选择主显示器；多显示器时用查询结果中的 `device` 精确选择，可选 `refresh_hz`。
+请求始终先做 `CDS_TEST`，随后动态应用，最多等待 3 秒核验实际值；不写注册表、
+不修改 DPI 或桌面拓扑。`test_only=true` 只预检查，`applied=false` 是预期结果。
+检查返回的 `before`、`after`、`test_code`、`change_code`、`applied`、`verified` 和 `error`。
+RDP 驱动可能返回成功但忽略修改，工具会返回 `status=client_resize_required`，此时需
+在 RDP 客户端动态调整窗口或用目标分辨率重连。该工具不替用户断开或重建 RDP 会话。
+临时结果经 SFTP 读取后删除。
 
 ## 验证
 
@@ -129,6 +149,9 @@ build/mcp-venv/bin/python tests/test_mcp.py --live
 # 桌面探针与截图（参数为已登录的 Session ID 和预期用户名）：
 build/mcp-venv/bin/python tests/test_desktop_launch.py 3 agent
 build/mcp-venv/bin/python tests/test_session_screenshot.py 3 agent
+build/mcp-venv/bin/python tests/test_session_display.py 3 agent
+# 可选实测切换到 1280x720，再恢复原模式；RDP 忽略修改时验证错误状态：
+build/mcp-venv/bin/python tests/test_session_display.py 3 agent --change
 ```
 
 本项目使用官方 [MCP Python SDK v1](https://py.sdk.modelcontextprotocol.io/v1/)

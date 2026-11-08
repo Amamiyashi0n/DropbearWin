@@ -31,6 +31,7 @@ async def main():
             assert png.startswith(b"\x89PNG\r\n\x1a\n")
             assert struct.unpack(">II", png[16:24]) == (metadata["width"], metadata["height"])
             assert metadata["session_id"] == session_id
+            assert metadata["capture_mode"] == "virtual_desktop"
             assert metadata["windows_user"].lower().split("\\")[-1] == user.lower().split("\\")[-1]
             print("PASS live MCP PNG screenshot:", json.dumps(metadata), "bytes=", len(png))
 

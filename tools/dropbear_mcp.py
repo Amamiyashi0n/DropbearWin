@@ -190,6 +190,68 @@ class Remote:
             raise RuntimeError("DropbearWin guide failed: " + err.decode("utf-8", "replace"))
         return out.decode("utf-8-sig")
 
+    def session_display(self, session_id: int, expected_user: str | None = None,
+                        width: int | None = None, height: int | None = None,
+                        device: str | None = None, refresh_hz: int | None = None,
+                        test_only: bool = False) -> dict:
+        if not 0 < session_id < 0xFFFFFFFF:
+            raise ValueError("session_id must be a positive Windows Session ID")
+        if (width is None) != (height is None):
+            raise ValueError("Specify both width and height")
+        if width is not None and (not 320 <= width <= 16384 or not 200 <= height <= 16384):
+            raise ValueError("Resolution must be within 320..16384 by 200..16384 pixels")
+        if refresh_hz is not None and not 1 <= refresh_hz <= 1000:
+            raise ValueError("refresh_hz must be 1..1000")
+        context = self.probe()
+        if not context.get("desktop_launch", {}).get("arbitrary_session") or not context.get("server_executable"):
+            raise RuntimeError("Upgrade the remote EXE to support explicit desktop sessions")
+        request = {"action": "query" if width is None else "set", "width": width, "height": height,
+                   "device": device, "refresh_hz": refresh_hz, "test_only": test_only}
+        base = "C:/Users/Public/dropbear-display-" + uuid.uuid4().hex
+        script = Path(__file__).with_name("session_display.ps1").read_text(encoding="utf-8")
+        script = script.replace("OUTPUT_BASE", base.replace("/", "\\")).replace(
+            "REQUEST_BASE64", base64.b64encode(json.dumps(request).encode("utf-8")).decode())
+        arguments = ["--desktop-launch", "--session", str(session_id)]
+        if expected_user:
+            arguments += ["--expect-user", expected_user]
+        arguments += [r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                      "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand",
+                      base64.b64encode(script.encode("utf-16le")).decode("ascii")]
+        client = self.connect()
+        try:
+            with client.open_sftp() as sftp:
+                try:
+                    out, err, status = self.exchange(payload=encode_request({
+                        "program": context["server_executable"], "args": arguments}))
+                    if status:
+                        raise RuntimeError("Display worker launch failed: " + err.decode("utf-8", "replace"))
+                    deadline = time.monotonic() + 30
+                    while True:
+                        try:
+                            info = sftp.stat(base + ".json")
+                        except FileNotFoundError:
+                            if time.monotonic() >= deadline:
+                                raise TimeoutError("Display worker did not report within 30 seconds")
+                            time.sleep(.2)
+                            continue
+                        if info.st_size > self.settings.max_output:
+                            raise ValueError("Display report exceeded 1 MiB")
+                        with sftp.open(base + ".json", "rb") as f:
+                            result = json.loads(f.read(self.settings.max_output + 1))
+                        if result.get("session_id", session_id) != session_id:
+                            raise RuntimeError("Display worker reported a different Session ID")
+                        # Keep native failure codes and before/after values available
+                        # to callers; never report an unverified resolution as applied.
+                        return result
+                finally:
+                    for suffix in (".json", ".json.tmp"):
+                        try:
+                            sftp.remove(base + suffix)
+                        except FileNotFoundError:
+                            pass
+        finally:
+            client.close()
+
     def manifest(self) -> dict:
         out, err, status = self.exchange("__dropbear_win_manifest__")
         if status:
@@ -305,14 +367,33 @@ def create_server(remote: Remote) -> FastMCP:
 
     @server.tool(annotations={"readOnlyHint": True, "destructiveHint": False})
     def dropbear_session_screenshot(session_id: int, expected_user: str | None = None) -> list[ImageContent | TextContent]:
-        """Capture the selected logged-on console/RDP session as a PNG MCP image.
+        """Capture the full virtual desktop (all monitors) of a console/RDP session as PNG.
 
         Runs a short capture worker with that user's token; does not unlock or
-        create a login. Returns image plus actual user/session/desktop/dimensions.
+        create a login. Default scope is the entire session, never just the active
+        window. Returns image plus actual user/session/desktop/dimensions.
         """
         png, metadata = remote.session_screenshot(session_id, expected_user)
         return [TextContent(type="text", text=json.dumps(metadata, ensure_ascii=False)),
                 ImageContent(type="image", data=base64.b64encode(png).decode("ascii"), mimeType="image/png")]
+
+    @server.tool(annotations={"readOnlyHint": True})
+    def dropbear_session_display(session_id: int, expected_user: str | None = None) -> dict:
+        """Query the selected user's displays, current resolution and driver-advertised modes."""
+        return remote.session_display(session_id, expected_user)
+
+    @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
+    def dropbear_session_set_resolution(session_id: int, width: int, height: int,
+                                        expected_user: str | None = None, device: str | None = None,
+                                        refresh_hz: int | None = None, test_only: bool = False) -> dict:
+        """Test/apply resolution inside the selected logged-on console/RDP session.
+
+        Defaults to primary display; device names come from dropbear_session_display.
+        Always runs CDS_TEST first, applies without registry persistence and verifies
+        actual dimensions. test_only does not apply. Native errors are returned in
+        error/test_code/change_code; RDP drivers may require client-side resizing.
+        """
+        return remote.session_display(session_id, expected_user, width, height, device, refresh_hz, test_only)
 
     @server.resource("dropbear://context", mime_type="application/json")
     def context_resource() -> str:
