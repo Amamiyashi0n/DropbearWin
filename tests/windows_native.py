@@ -120,7 +120,9 @@ def run(executable, backend):
                 assert probe["default_port"] == 22
                 assert probe["ssh_auth_user"] == "agent" and probe["windows_user"]
                 assert probe["agent_guide_command"] == "__dropbear_win_guide__"
-                assert probe["desktop_launch"]["arbitrary_session"] is False
+                assert probe["desktop_launch"]["arbitrary_session"] is True
+                assert probe["desktop_launch"]["creates_login"] is False
+                assert probe["server_executable"]
                 assert probe["exec_subsystem"] == "dropbear-exec-v1"
                 assert probe["control_encoding"] == "base64"
                 assert probe["exec_protocols"] == [1, 2] and probe["exec_protocol_default"] == 2
@@ -128,7 +130,7 @@ def run(executable, backend):
                 assert status == 0 and not err, (guide, err, status)
                 for text in (b"name: dropbear-win-agent-context", b"Authoritative connection",
                              b"__dropbear_win_probe__", b"Effective Windows identity:",
-                             b"Never infer Windows privileges", b"Arbitrary or RDP Session ID"):
+                             b"Never infer Windows privileges", b"--expect-user USER"):
                     assert text in guide, (text, guide)
                 if backend == "cmd":
                     quoted_program = directory / "quoted command.exe"

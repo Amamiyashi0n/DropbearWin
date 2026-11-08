@@ -67,11 +67,20 @@ Consult `desktop_launch` capabilities in the probe. The current EXE supports:
 
 ```cmd
 "C:\Program Files\DropbearWin\dropbear-win-x64.exe" --desktop-launch "C:\absolute\program.exe" [args]
+"C:\Program Files\DropbearWin\dropbear-win-x64.exe" --desktop-launch --session 3 --expect-user agent "C:\absolute\program.exe" [args]
 ```
 
-It selects the active physical console and uses that user's primary token and
-environment. Arbitrary/RDP Session selection is currently unsupported. Do not
-invent a `--session` flag or assume this command targets an RDP agent worker.
+It defaults to the physical console; `--session ID` selects an existing
+active/connected console or RDP login when the live probe advertises support.
+Use `--expect-user USER` (optionally DOMAIN\USER) to guard against ID reuse.
+The process uses that user's primary token/environment; Session 0 and mismatched
+users are rejected. This creates no new login and does not unlock the desktop.
+Use MCP `dropbear_desktop_launch` with `session_id` and `expected_user` where available.
+Verify process identity, Session ID and UI readiness separately after launch.
+Use `dropbear_session_screenshot(session_id=3, expected_user="agent")` to capture
+that user's desktop as an MCP PNG image. It returns actual identity/session and
+dimensions, uses a short user-token worker and cleans its temporary capture files.
+Locked or unavailable input desktops fail; this tool does not unlock a session.
 For an existing worker in a user session, keep its commands and UI operations
 in that session; SSH can coordinate through the worker's configured interface.
 

@@ -349,14 +349,24 @@ python tests/windows_stress.py dist/dropbear-win-x86.exe build/stress-x86.json
 
 ```cmd
 "C:\Program Files\DropbearWin\dropbear-win-x64.exe" --desktop-launch "C:\Windows\System32\notepad.exe"
+rem 指定已登录的 RDP 会话，并校验该会话属于 agent：
+"C:\Program Files\DropbearWin\dropbear-win-x64.exe" --desktop-launch --session 3 --expect-user agent "C:\Windows\System32\notepad.exe"
 ```
 
 可在程序路径后追加参数。程序路径必须是带盘符的绝对 EXE 路径。启动的桌面程序使用
-该控制台登录用户的 Windows 令牌和环境，独立于 SSH 会话；SSH 断开后程序仍会运行。
+所选登录用户的 Windows 令牌和环境，独立于 SSH 会话；SSH 断开后程序仍会运行。
 它不会继承 SSH 服务的 SYSTEM 权限。没有用户登录物理控制台时命令明确失败。
 此功能需要 Windows Vista / Server 2008 或更新版本；在 XP / Server 2003 上，
 普通 SSH 与服务仍可使用。普通 SSH 命令继续保留原有 SYSTEM 权限和会话 0 行为。
-若需要启动 RDP 桌面，此命令目前只选择物理控制台会话，不会猜测其他用户的会话。
+`--session ID` 可选择已有 Active/Connected 的控制台或 RDP 会话；Session 0、无登录用户
+或 `--expect-user` 身份不符会拒绝启动。用户名可为 `agent` 或 `DOMAIN\agent`。
+不指定 Session 时仍选择物理控制台。它不创建新登录、不解锁桌面；锁屏、断开连接、
+UAC 和应用初始化仍可能影响 UI 自动化，启动返回 PID 不等于应用已就绪。
+
+MCP 提供 `dropbear_desktop_launch` 和 `dropbear_session_screenshot`。
+例如截图参数 `session_id=3, expected_user="agent"`，返回 PNG 图片及实际用户、会话和
+屏幕尺寸。截图使用该用户桌面的短时进程，经 SFTP 取回后清理临时文件，详见
+[Skill 与 MCP 集成](docs/agent-mcp.md)。
 
 ### 开机自动启动
 
@@ -379,8 +389,8 @@ Windows 不会永久记住一次 UAC 同意：以后手动启动 EXE 时仍可�
 直接启动已注册的服务。默认服务以 LocalSystem 身份运行，SSH 登录后的命令和文件
 传输继承该身份。SSH 登录 Banner 会把 Dropbear 认证名与 Windows 实际身份分开显示，
 并标明访问令牌和 Windows Session ID；普通 SSH 命令以 Banner 中的 Windows 身份运行。
-Banner 还会给出 `--desktop-launch` 示例，并明确切到物理控制台用户 Session 后，新 GUI
-改用该用户的主令牌和环境，不再保留 SSH 的 SYSTEM 令牌；该命令不选择任意 RDP Session。
+Banner 还会给出 `--desktop-launch --session ID --expect-user USER` 示例；新 GUI
+改用所选会话用户的主令牌和环境，不再保留 SSH 的 SYSTEM 令牌。
 卸载请在目标机本地运行安装目录中的
 `uninstall-dropbear-service.cmd`，或执行安装 EXE 的 `--uninstall`；默认保留账号
 和主机密钥，附加 `--purge-data` 才会删除安装数据。

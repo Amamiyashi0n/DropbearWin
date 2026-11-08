@@ -20,6 +20,9 @@ import dropbear_mcp
 
 
 class FixtureRemote(Remote):
+    def session_screenshot(self, session_id, expected_user=None):
+        return base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5v8AAAAASUVORK5CYII="), {
+            "session_id": session_id, "width": 1, "height": 1, "windows_user": "host\\agent"}
     def manifest(self):
         return {"schema_version": 1, "skill_sha256": hashlib.sha256(b"skill").hexdigest(),
                 "mcp_sha256": hashlib.sha256(b"{}").hexdigest()}
@@ -54,9 +57,14 @@ class MCPContract(unittest.IsolatedAsyncioTestCase):
                 listed = await client.list_tools()
                 tools = {tool.name: tool for tool in listed.tools}
                 self.assertEqual(set(tools), {"dropbear_context", "dropbear_guide",
-                    "dropbear_manifest", "dropbear_sessions", "dropbear_run_command", "dropbear_exec"})
+                    "dropbear_manifest", "dropbear_sessions", "dropbear_run_command", "dropbear_exec", "dropbear_desktop_launch", "dropbear_session_screenshot"})
                 self.assertTrue(tools["dropbear_context"].annotations.readOnlyHint)
                 self.assertTrue(tools["dropbear_exec"].annotations.destructiveHint)
+                shot = await client.call_tool("dropbear_session_screenshot", {"session_id": 3, "expected_user": "agent"})
+                self.assertFalse(shot.isError)
+                self.assertEqual(shot.content[1].type, "image")
+                self.assertEqual(shot.content[1].mimeType, "image/png")
+                self.assertTrue(base64.b64decode(shot.content[1].data).startswith(b"\x89PNG"))
                 resources = await client.list_resources()
                 self.assertEqual({str(r.uri) for r in resources.resources},
                                  {"dropbear://context", "dropbear://guide", "dropbear://manifest"})

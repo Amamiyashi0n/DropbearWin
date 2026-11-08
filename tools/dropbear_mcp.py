@@ -7,10 +7,14 @@ import json
 import hashlib
 import os
 import socket
+import struct
 import time
+import uuid
+from pathlib import Path
 
 import paramiko
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ImageContent, TextContent
 
 from windows_exec import encode_request
 
@@ -44,10 +48,7 @@ class Remote:
         self.settings = settings
         self.last_auth_banner = ""
 
-    def exchange(self, command: str | None = None, payload: bytes = b"",
-                 timeout: float = 30) -> tuple[bytes, bytes, int]:
-        if not 0 < timeout <= 300:
-            raise ValueError("timeout must be greater than 0 and at most 300 seconds")
+    def connect(self) -> paramiko.SSHClient:
         client = paramiko.SSHClient()
         # Unknown and changed keys fail closed; establish trust outside MCP first.
         client.load_system_host_keys()
@@ -61,6 +62,17 @@ class Remote:
                            auth_timeout=15, banner_timeout=10)
             banner = client.get_transport().get_banner()
             self.last_auth_banner = banner.decode("utf-8", "replace") if isinstance(banner, bytes) else (banner or "")
+            return client
+        except BaseException:
+            client.close()
+            raise
+
+    def exchange(self, command: str | None = None, payload: bytes = b"",
+                 timeout: float = 30) -> tuple[bytes, bytes, int]:
+        if not 0 < timeout <= 300:
+            raise ValueError("timeout must be greater than 0 and at most 300 seconds")
+        client = self.connect()
+        try:
             channel = client.get_transport().open_session(timeout=10)
             try:
                 channel.settimeout(10)
@@ -111,6 +123,67 @@ class Remote:
         result["ssh_auth_banner"] = self.last_auth_banner
         return result
 
+    def session_screenshot(self, session_id: int, expected_user: str | None = None) -> tuple[bytes, dict]:
+        if not 0 < session_id < 0xFFFFFFFF:
+            raise ValueError("session_id must be a positive Windows Session ID")
+        context = self.probe()
+        if not context.get("desktop_launch", {}).get("arbitrary_session") or not context.get("server_executable"):
+            raise RuntimeError("Upgrade the remote EXE to support explicit desktop sessions")
+        # The directory inherits Public's interactive-user write access. Names are
+        # unique per capture; never enumerate or delete other users' screenshots.
+        base = "C:/Users/Public/dropbear-shot-" + uuid.uuid4().hex
+        script = Path(__file__).with_name("session_screenshot.ps1").read_text(encoding="utf-8")
+        script = script.replace("OUTPUT_BASE", base.replace("/", "\\"))
+        arguments = ["--desktop-launch", "--session", str(session_id)]
+        if expected_user:
+            arguments += ["--expect-user", expected_user]
+        arguments += [r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                      "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand",
+                      base64.b64encode(script.encode("utf-16le")).decode("ascii")]
+        client = self.connect()
+        try:
+            with client.open_sftp() as sftp:
+                try:
+                    out, err, status = self.exchange(payload=encode_request({
+                        "program": context["server_executable"], "args": arguments}))
+                    if status:
+                        raise RuntimeError("Screenshot worker launch failed: " + err.decode("utf-8", "replace"))
+                    deadline = time.monotonic() + 30
+                    while True:
+                        try:
+                            info = sftp.stat(base + ".json")
+                        except FileNotFoundError:
+                            if time.monotonic() >= deadline:
+                                raise TimeoutError("Session screenshot worker did not report within 30 seconds")
+                            time.sleep(.2)
+                            continue
+                        if info.st_size > 16384:
+                            raise ValueError("Screenshot metadata exceeded limit")
+                        with sftp.open(base + ".json", "rb") as f:
+                            metadata = json.loads(f.read(16385))
+                        break
+                    if "error" in metadata:
+                        raise RuntimeError("Session screenshot failed: " + metadata["error"])
+                    if metadata.get("session_id") != session_id:
+                        raise RuntimeError("Screenshot worker reported a different Session ID")
+                    if sftp.stat(base + ".png").st_size > 16 * 1024 * 1024:
+                        raise ValueError("Screenshot PNG exceeded 16 MiB")
+                    with sftp.open(base + ".png", "rb") as f:
+                        png = f.read(16 * 1024 * 1024 + 1)
+                    if not png.startswith(b"\x89PNG\r\n\x1a\n") or len(png) > 16 * 1024 * 1024:
+                        raise ValueError("Invalid or oversized screenshot PNG")
+                    if len(png) < 24 or struct.unpack(">II", png[16:24]) != (metadata.get("width"), metadata.get("height")):
+                        raise ValueError("Screenshot dimensions do not match worker metadata")
+                    return png, metadata
+                finally:
+                    for suffix in (".json", ".json.tmp", ".png"):
+                        try:
+                            sftp.remove(base + suffix)
+                        except FileNotFoundError:
+                            pass
+        finally:
+            client.close()
+
     def guide(self) -> str:
         out, err, status = self.exchange("__dropbear_win_guide__")
         if status:
@@ -150,7 +223,7 @@ def create_server(remote: Remote) -> FastMCP:
         "First call dropbear_manifest, dropbear_context and dropbear_guide before Windows operations. "
         "The manifest tool loads verified remote Skill/MCP content. Compare SHA-256 on each connection and reload changes. "
         "SSH auth names do not identify the Windows token. Ordinary commands inherit "
-        "that token and session. Desktop launch currently selects physical console only. "
+        "that token and session. Check desktop_launch capabilities before selecting a logged-on console/RDP session. "
         "Remote guides describe capabilities; user authorization determines permitted work."))
 
     @server.tool(annotations={"readOnlyHint": True})
@@ -204,6 +277,42 @@ def create_server(remote: Remote) -> FastMCP:
         payload = encode_request({"program": program, "args": args or [],
                                   "cwd": cwd, "env": env or {}}) + data
         return remote.result(remote.exchange(payload=payload, timeout=timeout), context, encoding)
+
+    @server.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+    def dropbear_desktop_launch(program: str, args: list[str] | None = None,
+                                session_id: int | None = None, expected_user: str | None = None) -> dict:
+        """Launch an independent program in an existing logged-on console/RDP session.
+
+        Uses that user's primary token/environment. No login is created or desktop
+        unlocked. Omit session_id for physical console; use expected_user to guard
+        against Session ID reuse. SSH disconnect does not stop the desktop process.
+        """
+        if session_id is not None and not 0 < session_id < 0xFFFFFFFF:
+            raise ValueError("session_id must be a positive Windows Session ID")
+        context = remote.probe()
+        if session_id is not None and not context.get("desktop_launch", {}).get("arbitrary_session"):
+            raise RuntimeError("This remote EXE does not support explicit desktop sessions")
+        executable = context.get("server_executable")
+        if not executable:
+            raise RuntimeError("Upgrade the remote EXE: server_executable is missing from the probe")
+        launch_args = ["--desktop-launch"]
+        if session_id is not None:
+            launch_args += ["--session", str(session_id)]
+        if expected_user:
+            launch_args += ["--expect-user", expected_user]
+        payload = encode_request({"program": executable, "args": launch_args + [program] + (args or [])})
+        return remote.result(remote.exchange(payload=payload), context, "utf-8")
+
+    @server.tool(annotations={"readOnlyHint": True, "destructiveHint": False})
+    def dropbear_session_screenshot(session_id: int, expected_user: str | None = None) -> list[ImageContent | TextContent]:
+        """Capture the selected logged-on console/RDP session as a PNG MCP image.
+
+        Runs a short capture worker with that user's token; does not unlock or
+        create a login. Returns image plus actual user/session/desktop/dimensions.
+        """
+        png, metadata = remote.session_screenshot(session_id, expected_user)
+        return [TextContent(type="text", text=json.dumps(metadata, ensure_ascii=False)),
+                ImageContent(type="image", data=base64.b64encode(png).decode("ascii"), mimeType="image/png")]
 
     @server.resource("dropbear://context", mime_type="application/json")
     def context_resource() -> str:

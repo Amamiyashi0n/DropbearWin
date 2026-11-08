@@ -1,6 +1,7 @@
 #include "includes.h"
 #include "win-account.h"
 #include "session.h"
+#include <wtsapi32.h>
 
 struct process_entry {
 	DWORD pid;
@@ -121,26 +122,36 @@ static HMODULE desktop_system_library(const wchar_t *name) {
 int dropbear_win_desktop_launch_main(void) {
 	typedef DWORD (WINAPI *active_session_fn)(void);
 	typedef BOOL (WINAPI *query_user_token_fn)(ULONG, PHANDLE);
+	typedef BOOL (WINAPI *query_session_fn)(HANDLE, DWORD, WTS_INFO_CLASS, LPWSTR *, DWORD *);
+	typedef void (WINAPI *wts_free_fn)(PVOID);
 	typedef BOOL (WINAPI *create_environment_fn)(LPVOID *, HANDLE, BOOL);
 	typedef BOOL (WINAPI *destroy_environment_fn)(LPVOID);
 	typedef LPWSTR *(WINAPI *parse_command_fn)(LPCWSTR, int *);
 	HMODULE kernel, wts = NULL, userenv = NULL, shell32 = NULL;
 	active_session_fn active_session;
 	query_user_token_fn query_user_token;
+	query_session_fn query_session;
+	wts_free_fn wts_free;
 	create_environment_fn create_environment;
 	destroy_environment_fn destroy_environment = NULL;
 	parse_command_fn parse_command;
 	LPWSTR *arguments = NULL;
 	wchar_t *line = NULL;
 	wchar_t executable[32768], directory[32768], *slash;
+	wchar_t *expected_user = NULL, *end, name[256], domain[256], identity[520];
+	char identity_utf8[1560];
+	TOKEN_USER *token_user = NULL;
+	WTS_CONNECTSTATE_CLASS *session_state = NULL;
+	DWORD token_size = 0, actual_session, returned, name_size = 256, domain_size = 256;
+	SID_NAME_USE sid_use;
 	HANDLE token = NULL, process_token = NULL;
 	LPVOID environment = NULL;
 	STARTUPINFOW startup;
 	PROCESS_INFORMATION process;
 	TOKEN_PRIVILEGES privileges;
 	LUID luid;
-	DWORD session, attributes, error, length;
-	int argc = 0, i, result = 1;
+	DWORD session = 0xffffffffUL, attributes, error, length;
+	int argc = 0, i, program_index = 2, explicit_session = 0, result = 1;
 	size_t used = 0;
 	const wchar_t *privilege_names[] = {
 		L"SeTcbPrivilege", L"SeAssignPrimaryTokenPrivilege",
@@ -155,27 +166,47 @@ int dropbear_win_desktop_launch_main(void) {
 	active_session = kernel ? (active_session_fn)(void *)GetProcAddress(kernel,
 		"WTSGetActiveConsoleSessionId") : NULL;
 	query_user_token = wts ? (query_user_token_fn)(void *)GetProcAddress(wts, "WTSQueryUserToken") : NULL;
+	query_session = wts ? (query_session_fn)(void *)GetProcAddress(wts, "WTSQuerySessionInformationW") : NULL;
+	wts_free = wts ? (wts_free_fn)(void *)GetProcAddress(wts, "WTSFreeMemory") : NULL;
 	create_environment = userenv ? (create_environment_fn)(void *)GetProcAddress(userenv, "CreateEnvironmentBlock") : NULL;
 	destroy_environment = userenv ? (destroy_environment_fn)(void *)GetProcAddress(userenv, "DestroyEnvironmentBlock") : NULL;
-	if (!parse_command || !active_session || !query_user_token ||
+	if (!parse_command || !active_session || !query_user_token || !query_session || !wts_free ||
 			!create_environment || !destroy_environment) {
 		fputs("Desktop launch requires Windows Vista/Server 2008 or newer.\n", stderr);
 		goto done;
 	}
 	arguments = parse_command(GetCommandLineW(), &argc);
-	if (!arguments || argc < 3 || !arguments[2][0]) {
-		fputs("Usage: dropbear-win.exe --desktop-launch C:\\absolute\\program.exe [arguments...]\n", stderr);
+	if (!arguments) goto done;
+	while (program_index < argc && arguments[program_index][0] == L'-') {
+		if (!wcscmp(arguments[program_index], L"--session") && !explicit_session && program_index + 1 < argc) {
+			const wchar_t *value = arguments[++program_index];
+			if (!value[0] || wcsspn(value, L"0123456789") != wcslen(value)) goto usage;
+			errno = 0;
+			session = wcstoul(value, &end, 10);
+			if (errno || *end || !session || session == 0xffffffffUL) goto usage;
+			explicit_session = 1;
+		} else if (!wcscmp(arguments[program_index], L"--expect-user") && !expected_user && program_index + 1 < argc) {
+			expected_user = arguments[++program_index];
+			if (!expected_user[0]) goto usage;
+		} else goto usage;
+		program_index++;
+	}
+	if (program_index >= argc || !arguments[program_index][0]) {
+usage:
+		fputs("Usage: dropbear-win.exe --desktop-launch [--session ID] [--expect-user [DOMAIN\\]user] C:\\absolute\\program.exe [arguments...]\n"
+			"Session ID must be a nonzero logged-on console/RDP session; this does not create a Windows login.\n", stderr);
 		goto done;
 	}
 	/* Do not search the SYSTEM service's PATH or resolve relative to its cwd. */
-	if (!((arguments[2][0] >= L'A' && arguments[2][0] <= L'Z') ||
-			(arguments[2][0] >= L'a' && arguments[2][0] <= L'z')) ||
-			arguments[2][1] != L':' ||
-			(arguments[2][2] != L'\\' && arguments[2][2] != L'/')) {
+	if (wcslen(arguments[program_index]) < 3 ||
+			!((arguments[program_index][0] >= L'A' && arguments[program_index][0] <= L'Z') ||
+			(arguments[program_index][0] >= L'a' && arguments[program_index][0] <= L'z')) ||
+			arguments[program_index][1] != L':' ||
+			(arguments[program_index][2] != L'\\' && arguments[program_index][2] != L'/')) {
 		fputs("Desktop launch requires a drive-absolute executable path.\n", stderr);
 		goto done;
 	}
-	length = GetFullPathNameW(arguments[2], 32768, executable, NULL);
+	length = GetFullPathNameW(arguments[program_index], 32768, executable, NULL);
 	if (!length || length >= 32768) {
 		fputs("Could not normalize the desktop executable path.\n", stderr);
 		goto done;
@@ -187,7 +218,7 @@ int dropbear_win_desktop_launch_main(void) {
 	}
 	line = calloc(32768, sizeof(*line));
 	if (!line || !exec_argument(line, &used, executable)) goto done;
-	for (i = 3; i < argc; i++) if (!exec_argument(line, &used, arguments[i])) {
+	for (i = program_index + 1; i < argc; i++) if (!exec_argument(line, &used, arguments[i])) {
 		fputs("Desktop command exceeds the Windows command-line limit.\n", stderr);
 		goto done;
 	}
@@ -206,16 +237,37 @@ int dropbear_win_desktop_launch_main(void) {
 			goto done;
 		}
 	}
-	session = active_session();
+	if (!explicit_session) session = active_session();
 	if (session == 0xffffffffUL) {
 		fputs("No active console session is available.\n", stderr);
 		goto done;
 	}
-	if (!query_user_token(session, &token)) {
-		fprintf(stderr, "No logged-on console user is available: Windows error %lu.\n",
-			(unsigned long)GetLastError());
+	if (!query_session(NULL, session, WTSConnectState, (LPWSTR *)&session_state, &returned) ||
+			returned < sizeof(*session_state) ||
+			(*session_state != WTSActive && *session_state != WTSConnected)) {
+		fputs("Target session must be active/connected and have a logged-on user. Inspect query session first.\n", stderr);
 		goto done;
 	}
+	if (!query_user_token(session, &token)) {
+		fprintf(stderr, "No logged-on user is available in session %lu: Windows error %lu. Use --session ID for an existing RDP login.\n",
+			(unsigned long)session, (unsigned long)GetLastError());
+		goto done;
+	}
+	if (!GetTokenInformation(token, TokenSessionId, &actual_session, sizeof(actual_session), &returned) ||
+			actual_session != session) {
+		fputs("Target token session does not match requested session.\n", stderr); goto done;
+	}
+	GetTokenInformation(token, TokenUser, NULL, 0, &token_size);
+	token_user = token_size ? calloc(1, token_size) : NULL;
+	if (!token_user || !GetTokenInformation(token, TokenUser, token_user, token_size, &returned) ||
+			!LookupAccountSidW(NULL, token_user->User.Sid, name, &name_size, domain, &domain_size, &sid_use)) {
+		fputs("Could not verify target session Windows identity.\n", stderr); goto done;
+	}
+	_snwprintf(identity, 520, L"%ls%ls%ls", domain, domain[0] ? L"\\" : L"", name);
+	if (expected_user && _wcsicmp(expected_user, wcschr(expected_user, L'\\') ? identity : name)) {
+		fputs("Target session user does not match --expect-user; no process was started.\n", stderr); goto done;
+	}
+	if (!WideCharToMultiByte(CP_UTF8, 0, identity, -1, identity_utf8, sizeof(identity_utf8), NULL, NULL)) goto done;
 	if (!create_environment(&environment, token, FALSE)) {
 		fprintf(stderr, "Could not build the desktop user's environment: Windows error %lu.\n",
 			(unsigned long)GetLastError());
@@ -232,19 +284,31 @@ int dropbear_win_desktop_launch_main(void) {
 	startup.dwFlags = STARTF_USESHOWWINDOW;
 	startup.wShowWindow = SW_SHOWNORMAL;
 	if (!CreateProcessAsUserW(token, executable, line, NULL, NULL, FALSE,
-			CREATE_BREAKAWAY_FROM_JOB | CREATE_UNICODE_ENVIRONMENT,
+			CREATE_BREAKAWAY_FROM_JOB | CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_CONSOLE,
 			environment, directory, &startup, &process)) {
 		error = GetLastError();
 		fprintf(stderr, "Desktop process startup failed: Windows error %lu.\n",
 			(unsigned long)error);
 		goto done;
 	}
-	printf("Desktop process started: PID %lu, session %lu.\n",
-		(unsigned long)process.dwProcessId, (unsigned long)session);
+	/* A successful CreateProcess call precedes DLL/console initialization. Report
+	 * immediate startup failures instead of claiming a healthy desktop process. */
+	if (WaitForSingleObject(process.hProcess, 500) == WAIT_OBJECT_0) {
+		DWORD exit_code = ERROR_GEN_FAILURE;
+		if (!GetExitCodeProcess(process.hProcess, &exit_code) || exit_code) {
+			fprintf(stderr, "Desktop process exited during startup: PID %lu, Windows exit code %lu.\n",
+				(unsigned long)process.dwProcessId, (unsigned long)exit_code);
+			CloseHandle(process.hThread); CloseHandle(process.hProcess); goto done;
+		}
+	}
+	printf("Desktop process started: PID %lu, session %lu, user %s, desktop winsta0\\default (user token; SYSTEM not retained).\n",
+		(unsigned long)process.dwProcessId, (unsigned long)session, identity_utf8);
 	CloseHandle(process.hThread);
 	CloseHandle(process.hProcess);
 	result = 0;
 done:
+	free(token_user);
+	if (session_state && wts_free) wts_free(session_state);
 	if (process_token) CloseHandle(process_token);
 	if (environment && destroy_environment) destroy_environment(environment);
 	if (token) CloseHandle(token);
@@ -849,17 +913,17 @@ static int write_session_motd(int output_fd, const wchar_t *shell,
 	append_motd(motd, sizeof(motd), &used,
 		" Agent guide:  from the client run: ssh user@host __dropbear_win_guide__\r\n");
 	append_motd(motd, sizeof(motd), &used,
-		" Desktop GUI:  \"%s\" --desktop-launch \"C:\\absolute\\program.exe\" [args]\r\n",
+		" Desktop GUI:  \"%s\" --desktop-launch [--session ID] [--expect-user USER] \"C:\\absolute\\program.exe\" [args]\r\n",
 		safe_executable);
 	if (!strcmp(identity, "NT AUTHORITY\\SYSTEM")) {
 		append_motd(motd, sizeof(motd), &used,
-			" Permission switch: GUI uses the active console user's primary token/environment; SSH SYSTEM is NOT retained.\r\n");
+			" Permission switch: GUI uses the selected logged-on user's primary token/environment; SSH SYSTEM is NOT retained.\r\n");
 	} else {
 		append_motd(motd, sizeof(motd), &used,
 			" Permission switch: --desktop-launch is intended for an installed LocalSystem service; this SSH token is not SYSTEM.\r\n");
 	}
 	append_motd(motd, sizeof(motd), &used,
-		" Session target: active physical-console user only; switch that console login for another user (no arbitrary/RDP Session ID).\r\n");
+		" Session target: default physical console; --session ID selects an active/connected console or RDP login. No new login is created.\r\n");
 	append_motd(motd, sizeof(motd), &used, " Shell:        %s\r\n", shell_utf8);
 	append_motd(motd, sizeof(motd), &used, " Terminal:     %s (%s)\r\n",
 		safe_terminal[0] ? safe_terminal : "not requested",

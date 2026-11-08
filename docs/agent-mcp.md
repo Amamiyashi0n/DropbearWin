@@ -53,6 +53,8 @@ stdio 无法交互询问密码。不要把真实密码提交到仓库。
 | Tool | `dropbear_sessions` | 查询 Windows Session，返回原始字节和解码文本 |
 | Tool | `dropbear_run_command` | 按当前 CMD/PowerShell 语法执行命令 |
 | Tool | `dropbear_exec` | 通过 DBX2 执行 EXE、参数数组、cwd、环境及二进制 stdin |
+| Tool | `dropbear_desktop_launch` | 在指定的已登录控制台/RDP 会话启动独立程序，可核验用户名 |
+| Tool | `dropbear_session_screenshot` | 返回指定 Session 的 PNG 图片及真实用户、Session、尺寸 |
 | Resource | `dropbear://context` | JSON 格式的实时上下文 |
 | Resource | `dropbear://guide` | Markdown 格式的远程指南 |
 | Resource | `dropbear://manifest` | Skill/MCP 文件路径与 SHA-256 标识 |
@@ -104,9 +106,19 @@ MCP 初始化的 instructions 及 Skill 都声明这一发现流程；客户端�
 超时上限 300 秒，输出总量上限 1 MiB，结构化 stdin 上限 256 KiB。
 输出编码只影响文本字段，Base64 始终保留原始字节。
 
-普通命令使用 SSH 当前 Windows 令牌及 Session。`--desktop-launch` 当前只能选择
-活动物理控制台，使用该用户令牌；它还不支持显式选择 RDP Session 3。
-MCP 未提供虚构的 Session 切换工具；查询能力见实时探测。
+普通命令使用 SSH 当前 Windows 令牌及 Session。`dropbear_desktop_launch` 根据实时
+探测定位服务器 EXE，再通过结构化通道执行 `--desktop-launch`，支持 `session_id=3`
+和 `expected_user="agent"`。它使用所选已登录用户的令牌和环境，新程序独立于 SSH。
+不指定 Session 时默认物理控制台。它不创建登录、不解锁桌面；Session 0、已断开或
+身份不符会失败。旧版 EXE 未公布相关能力时，工具会报错而非猜测启动参数。
+
+截图示例：`dropbear_session_screenshot(session_id=3, expected_user="agent")`。
+客户端桥接器使用随附的 `tools/session_screenshot.ps1`，通过新 launcher 在所选
+用户桌面创建短时隐藏截图进程；PNG 经 SFTP 传回，作为 MCP `image/png` 内容返回，
+另附实际 Windows 用户、Session、桌面名及虚拟屏幕尺寸/偏移。读取后删除唯一命名的
+临时文件，不影响其他截图。依赖目标 Windows PowerShell、.NET System.Drawing。
+输入桌面锁定、会话不可用或采集失败会报错。PNG 上限 16 MiB，虚拟桌面上限 4000 万
+像素。输出是当前可采集桌面的实际像素；工具不解锁、不建立 RDP 登录。
 
 ## 验证
 
@@ -114,6 +126,9 @@ MCP 未提供虚构的 Session 切换工具；查询能力见实时探测。
 build/mcp-venv/bin/python tests/test_mcp.py
 # 配置好上述连接环境后，验证真实 SSH/MCP 链路（只读查询和 echo 探针）：
 build/mcp-venv/bin/python tests/test_mcp.py --live
+# 桌面探针与截图（参数为已登录的 Session ID 和预期用户名）：
+build/mcp-venv/bin/python tests/test_desktop_launch.py 3 agent
+build/mcp-venv/bin/python tests/test_session_screenshot.py 3 agent
 ```
 
 本项目使用官方 [MCP Python SDK v1](https://py.sdk.modelcontextprotocol.io/v1/)

@@ -12,11 +12,15 @@ EXE 同时支持直接运行和 Windows SCM 服务模式。
 
 ```cmd
 "C:\Program Files\DropbearWin\dropbear-win-x64.exe" --desktop-launch "C:\Windows\System32\notepad.exe"
+"C:\Program Files\DropbearWin\dropbear-win-x64.exe" --desktop-launch --session 3 --expect-user agent "C:\Windows\System32\notepad.exe"
 ```
 
-桌面程序使用已登录控制台用户的普通 Windows 令牌及环境，不继承服务的 SYSTEM
+桌面程序使用所选会话用户的 Windows 主令牌及环境，不继承服务的 SYSTEM
 权限，也不会因 SSH 断开而退出。程序路径必须是带盘符的绝对 EXE 路径，后面可以
-传递程序参数。没有登录的物理控制台用户时会报错；RDP 会话不会自动选中。
+传递程序参数。默认选择物理控制台；`--session ID` 可选择已有 Active/Connected 的
+RDP/控制台会话。建议同时传 `--expect-user agent` 或 `DOMAIN\agent` 防止会话编号复用。
+Session 0、未登录、已断开或用户不符会拒绝启动。这不创建新 Windows 登录、不解锁
+桌面；应先 `query session`，再选择目标。GUI 启动和 UI 自动化就绪需要分别验证。
 此命令依赖 Windows Vista / Server 2008 及更新系统的 WTS 用户令牌接口，
 XP / Server 2003 上只禁用该命令，普通 SSH 服务和命令仍保持原兼容目标。
 
@@ -52,8 +56,8 @@ SSH 登录 Banner 中的 `SSH user` 只是 Dropbear 自有认证名，不是 Win
 服务模式通常明确显示 `NT AUTHORITY\SYSTEM`、`LocalSystem / full SYSTEM`（并注明
 它不是普通的提权 Administrator 令牌）和
 `Session ID: 0 (service/non-interactive)`。同一 Banner 会显示当前 EXE 的
-`--desktop-launch` 调用方式和权限变化：新 GUI 使用物理控制台登录用户的主令牌与
-环境，不保留 SSH 的 SYSTEM 令牌，也不能按任意 Session ID 选择 RDP 会话。
+`--desktop-launch` 调用方式和权限变化：新 GUI 使用所选会话用户的主令牌与
+环境，不保留 SSH 的 SYSTEM 令牌；`--session` 可显式选择已登录的 RDP 会话。
 
 ## 交互式注册(免参数)
 
