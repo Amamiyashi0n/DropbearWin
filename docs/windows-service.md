@@ -69,9 +69,13 @@ Register this server as the Windows service "DropbearWin"? [y/N]
   原 EXE。绿色版所在目录为空时一并删除；其中的其他文件会保留。
 
 服务已注册且指向本程序时,后续控制台启动不再询问(缺卸载脚本时会补写)。服务名
-已被其他程序占用时不改动现有服务,仅提示。权限不足时报告 Windows 错误并退出
+指向带安装标记的 `Program Files\DropbearWin` 旧版时，会提示继续安装将替换旧程序
+和服务配置，并保留已安装的 SSH 账号与主机密钥；确认后执行升级。服务名指向其他
+程序时，会提示确认停止该服务并使用当前版本替换其服务配置。权限不足时报告
+Windows 错误并退出
 当前安装尝试。从管道或重定向 stdin 启动时不出现询问;`--service` 方式与
-脚本化部署不受影响。注册后用 `net start DropbearWin` 启动服务。
+脚本化部署不受影响。安装或替换完成后会立即启动服务；启动失败时保留
+`AUTO_START` 并显示 Windows 错误码，也可随后运行 `net start DropbearWin`。
 
 ## 手动注册(--service)
 

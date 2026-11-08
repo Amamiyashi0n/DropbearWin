@@ -180,8 +180,7 @@ static int read_yes_answer(void) {
 	return answer == 'y' || answer == 'Y';
 }
 
-static int open_existing_service(DWORD access, SC_HANDLE *manager_out,
-		SC_HANDLE *service_out) {
+static int open_existing_service(DWORD access, SC_HANDLE *service_out) {
 	SC_HANDLE manager, service;
 	manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
 	if (!manager) return 0;
@@ -282,6 +281,32 @@ static int service_uses_current_executable(SC_HANDLE service, const wchar_t *exe
 			_wcsnicmp(start, executable, (size_t)(end - start)) == 0) same = 1;
 	free(config);
 	return same;
+}
+
+static int stop_service_for_replacement(SC_HANDLE service) {
+	SERVICE_STATUS status;
+	int i;
+	if (!QueryServiceStatus(service, &status)) return 0;
+	if (status.dwCurrentState == SERVICE_STOPPED) return 1;
+	if (getenv("SSH_CONNECTION") && getenv("SSH_CONNECTION")[0]) {
+		fputs("Run the replacement from a local Windows console; stopping the SSH service would end this command.\n",
+			stderr);
+		return 0;
+	}
+	if (status.dwCurrentState != SERVICE_STOP_PENDING &&
+			!ControlService(service, SERVICE_CONTROL_STOP, &status) &&
+			GetLastError() != ERROR_SERVICE_NOT_ACTIVE) {
+		fprintf(stderr, "Could not stop the existing DropbearWin service: error %lu.\n",
+			(unsigned long)GetLastError());
+		return 0;
+	}
+	for (i = 0; i < 120; i++) {
+		if (!QueryServiceStatus(service, &status)) return 0;
+		if (status.dwCurrentState == SERVICE_STOPPED) return 1;
+		Sleep(250);
+	}
+	fputs("The existing DropbearWin service did not stop within 30 seconds.\n", stderr);
+	return 0;
 }
 
 static int install_executable_path(const wchar_t *source, wchar_t *directory,
@@ -428,7 +453,8 @@ static int launch_portable_cleanup(const wchar_t *installed_exe,
 	memset(&startup, 0, sizeof(startup));
 	memset(&process, 0, sizeof(process));
 	startup.cb = sizeof(startup);
-	if (!CreateProcessW(installed_exe, command, NULL, NULL, FALSE, CREATE_NO_WINDOW,
+	if (!CreateProcessW(installed_exe, command, NULL, NULL, FALSE,
+			CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB,
 			NULL, working_directory, &startup, &process)) return 0;
 	CloseHandle(process.hThread);
 	CloseHandle(process.hProcess);
@@ -509,12 +535,13 @@ static int install_registered_service(int argc, char **argv, DWORD start_type) {
 	char portable_data[MAX_PATH], installed_data[MAX_PATH];
 	char account_path[MAX_PATH], hostkey_path[MAX_PATH], portable_account[MAX_PATH];
 	char expected_portable[MAX_PATH];
+	const char *migration_data;
 	wchar_t *command_line = NULL;
 	SC_HANDLE manager = NULL, service = NULL;
-	SERVICE_STATUS status;
 	HANDLE marker_file;
 	DWORD length, attributes, open_error;
-	int match, marker_length, backup_length, result = 1, copied_exe = 0, backed_up_exe = 0;
+	int match, installed_match, installed_upgrade = 0, replacing_service = 0;
+	int marker_length, backup_length, result = 1, copied_exe = 0, backed_up_exe = 0;
 	int created_account = 0, created_hostkey = 0, created_marker = 0;
 	int created_data_dir = 0;
 
@@ -527,6 +554,7 @@ static int install_registered_service(int argc, char **argv, DWORD start_type) {
 		return 1;
 	}
 	strcpy(portable_data, dropbear_win_data_dir());
+	migration_data = portable_data;
 	{
 		wchar_t source_dir[32768], *slash;
 		if (wcslen(source_exe) >= 32768) return 1;
@@ -568,18 +596,24 @@ static int install_registered_service(int argc, char **argv, DWORD start_type) {
 		goto done;
 	}
 	service = OpenServiceW(manager, WIN_SETUP_NAME,
-		SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | SERVICE_CHANGE_CONFIG);
+		SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | SERVICE_CHANGE_CONFIG |
+		SERVICE_STOP | SERVICE_START);
 	if (service) {
 		match = service_uses_current_executable(service, source_exe);
-		if (match == 0) match = service_uses_current_executable(service, installed_exe);
-		if (match != 1) {
-			fputs("A different DropbearWin service exists; leaving it unchanged.\n", stderr);
-			goto done;
+		installed_match = service_uses_current_executable(service, installed_exe);
+		if (match != 1 && installed_match != 1) {
+			replacing_service = 1;
 		}
-		if (!QueryServiceStatus(service, &status) || status.dwCurrentState != SERVICE_STOPPED) {
-			fputs("Stop the existing DropbearWin service before upgrading its files.\n", stderr);
-			goto done;
+		if (match != 1 && installed_match == 1) {
+			attributes = GetFileAttributesW(marker);
+			if (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+				installed_upgrade = 1;
+				migration_data = installed_data;
+			} else {
+				replacing_service = 1;
+			}
 		}
+		if (!stop_service_for_replacement(service)) goto done;
 	} else {
 		open_error = GetLastError();
 		if (open_error != ERROR_SERVICE_DOES_NOT_EXIST) {
@@ -600,8 +634,8 @@ static int install_registered_service(int argc, char **argv, DWORD start_type) {
 		fputs("Could not secure the installed data directory.\n", stderr);
 		goto done;
 	}
-	if (!install_data_file(portable_data, installed_data, "account.conf", 1, &created_account) ||
-			!install_data_file(portable_data, installed_data, "hostkey_ed25519", 0, &created_hostkey)) {
+	if (!install_data_file(migration_data, installed_data, "account.conf", 1, &created_account) ||
+			!install_data_file(migration_data, installed_data, "hostkey_ed25519", 0, &created_hostkey)) {
 		fputs("Could not migrate the portable account and host identity.\n", stderr);
 		goto done;
 	}
@@ -635,8 +669,9 @@ static int install_registered_service(int argc, char **argv, DWORD start_type) {
 	command_line = dropbear_win_build_service_command_line(installed_exe, argc, argv);
 	if (!command_line) goto done;
 	if (service) {
-		if (!ChangeServiceConfigW(service, SERVICE_NO_CHANGE, start_type,
-				SERVICE_NO_CHANGE, command_line, NULL, NULL, NULL, NULL, NULL, NULL)) {
+		if (!ChangeServiceConfigW(service, SERVICE_WIN32_OWN_PROCESS, start_type,
+				SERVICE_ERROR_NORMAL, command_line, NULL, NULL, L"", L"LocalSystem", NULL,
+				WIN_SETUP_DISPLAY)) {
 			fprintf(stderr, "Could not update DropbearWin: error %lu.\n",
 				(unsigned long)GetLastError());
 			goto done;
@@ -651,9 +686,17 @@ static int install_registered_service(int argc, char **argv, DWORD start_type) {
 			goto done;
 		}
 	}
-	printf("Service installed: %ls\nEXE: %ls\nData: %s\n",
-		WIN_SETUP_NAME, installed_exe, installed_data);
+	printf("Service %s: %ls\nEXE: %ls\nData: %s\n",
+		installed_upgrade ? "upgraded" : (replacing_service ? "replaced" : "installed"), WIN_SETUP_NAME,
+		installed_exe, installed_data);
 	write_uninstall_script(installed_exe);
+	if (StartServiceW(service, 0, NULL) || GetLastError() == ERROR_SERVICE_ALREADY_RUNNING) {
+		printf("Service started: %ls\n", WIN_SETUP_NAME);
+	} else {
+		fprintf(stderr,
+			"Service installed, but it could not start (Windows error %lu); AUTO_START remains enabled.\n",
+			(unsigned long)GetLastError());
+	}
 	result = 0;
 done:
 	if (service) CloseServiceHandle(service);
@@ -873,49 +916,57 @@ int dropbear_win_install_autostart(int argc, char **argv) {
 }
 
 void dropbear_win_maybe_register_service(int argc, char **argv) {
-	SC_HANDLE manager, service;
-	wchar_t executable[32768];
+	SC_HANDLE service;
+	wchar_t executable[32768], install_dir[32768], installed_exe[32768], marker[32768];
+	DWORD attributes;
+	int current_match, installed_match, marker_length;
+	int upgrading = 0, replacing_service = 0;
 	if (service_mode || !_isatty(_fileno(stdin))) return;
 	if (!GetModuleFileNameW(NULL, executable, 32768)) return;
 
-	if (open_existing_service(SERVICE_QUERY_CONFIG, &manager, &service)) {
-		LPQUERY_SERVICE_CONFIGW config = NULL;
-		DWORD needed = 0, same_binary = 0;
-		QueryServiceConfigW(service, NULL, 0, &needed);
-		if (GetLastError() == ERROR_INSUFFICIENT_BUFFER && needed) {
-			config = malloc(needed);
-			if (config && QueryServiceConfigW(service, config, needed, &needed)
-					&& config->lpBinaryPathName) {
-				wchar_t *quoted = wcschr(config->lpBinaryPathName, L'"');
-				wchar_t *end;
-				if (quoted) {
-					quoted++;
-					end = wcschr(quoted, L'"');
-					if (end) {
-						size_t length = (size_t)(end - quoted);
-						size_t ours = wcslen(executable);
-						same_binary = length == ours
-							&& _wcsnicmp(quoted, executable, length) == 0;
-					}
-				}
-			}
-			free(config);
-		}
+	if (open_existing_service(SERVICE_QUERY_CONFIG, &service)) {
+		current_match = service_uses_current_executable(service, executable);
+		installed_match = install_executable_path(executable, install_dir, installed_exe, 32768)
+			? service_uses_current_executable(service, installed_exe) : 0;
+		marker_length = installed_match == 1
+			? _snwprintf(marker, 32768, L"%ls\\dropbear-win.installed", install_dir) : 0;
+		attributes = marker_length > 0 && marker_length < 32768
+			? GetFileAttributesW(marker) : INVALID_FILE_ATTRIBUTES;
 		CloseServiceHandle(service);
-		if (same_binary) write_uninstall_script(executable);
-		else fprintf(stderr,
-			"A different service named \"%ls\" already exists; leaving it untouched.\n",
-			WIN_SETUP_NAME);
-		return;
+		if (current_match == 1) {
+			write_uninstall_script(executable);
+			return;
+		}
+		if (installed_match != 1 || attributes == INVALID_FILE_ATTRIBUTES ||
+				(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+			replacing_service = 1;
+		} else {
+			upgrading = 1;
+		}
 	}
 
-	fputs("\nRegister this server as the Windows service \"DropbearWin\"? [y/N] ",
-		stdout);
+	if (upgrading) {
+		fputs("\nAn existing DropbearWin installation was found.\n"
+			"Installing this version will remove the old installed program and replace its service configuration.\n"
+			"The installed SSH account and host key will be preserved.\n"
+			"Continue with the upgrade? [y/N] ", stdout);
+	} else if (replacing_service) {
+		fputs("\nA service named \"DropbearWin\" already exists and points to another program.\n"
+			"Installing this version will stop that service and replace its service configuration.\n"
+			"Continue with the replacement? [y/N] ", stdout);
+	} else {
+		fputs("\nRegister this server as the Windows service \"DropbearWin\"? [y/N] ",
+			stdout);
+	}
 	fflush(stdout);
 	if (!read_yes_answer()) return;
 
 	if (install_registered_service(argc, argv, SERVICE_AUTO_START)) {
-		fputs("Service registration failed; portable EXE and data were preserved.\n", stderr);
+		fputs(upgrading
+			? "Service upgrade failed; the previous installation and portable copy were preserved.\n"
+			: (replacing_service
+				? "Service replacement failed; the existing service and portable copy were preserved.\n"
+				: "Service registration failed; portable EXE and data were preserved.\n"), stderr);
 		exit(1);
 	}
 	/* This process still has portable paths cached. The installed service starts

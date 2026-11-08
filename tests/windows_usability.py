@@ -528,9 +528,23 @@ def interactive_register_test(executable):
         port = free_port()
         env = {key: value for key, value in os.environ.items()
                if not key.startswith("DROPBEAR_WIN_")}
-        process = subprocess.Popen([str(deployed), "-p", f"127.0.0.1:{port}"],
-                                   env=env, creationflags=subprocess.CREATE_NEW_CONSOLE)
+        process = None
+        foreign_temp = Path(tempfile.mkdtemp(prefix="dropbear foreign service "))
         try:
+            # A fixed-name service owned by another program is replaced after
+            # confirmation instead of permanently blocking the installation.
+            foreign_exe = foreign_temp / deployed.name
+            shutil.copy2(executable, foreign_exe)
+            account(foreign_temp / "dropbear-win-data")
+            foreign_port = free_port()
+            command("create", "DropbearWin", "binPath=",
+                    subprocess.list2cmdline([str(foreign_exe), "--service", "DropbearWin",
+                                             "-p", f"127.0.0.1:{foreign_port}"]),
+                    "start=", "demand")
+            command("start", "DropbearWin")
+            eventually(lambda: b"RUNNING" in command("query", "DropbearWin").stdout)
+            process = subprocess.Popen([str(deployed), "-p", f"127.0.0.1:{port}"],
+                                       env=env, creationflags=subprocess.CREATE_NEW_CONSOLE)
             queue_console_text(process.pid, "y\r")
             assert process.wait(timeout=30) == 0
             installed_exe = install_dir / deployed.name
@@ -543,8 +557,32 @@ def interactive_register_test(executable):
             query = " ".join(command("qc", "DropbearWin").stdout.decode(
                 errors="replace").replace('"', ' ').split())
             assert "AUTO_START" in query and str(installed_exe) in query, query
-            command("start", "DropbearWin")
             eventually(lambda: b"RUNNING" in command("query", "DropbearWin").stdout)
+
+            # A later portable copy has a different account hash. Upgrading
+            # must replace the old EXE/config while preserving installed data.
+            upgrade_temp = Path(tempfile.mkdtemp(prefix="dropbear upgrade "))
+            upgrade_process = None
+            try:
+                upgrade_exe = upgrade_temp / deployed.name
+                shutil.copy2(executable, upgrade_exe)
+                upgrade_data = upgrade_temp / "dropbear-win-data"
+                account(upgrade_data)
+                assert (upgrade_data / "account.conf").read_bytes() != original_account
+                upgrade_process = subprocess.Popen(
+                    [str(upgrade_exe), "-p", f"127.0.0.1:{port}"], env=env,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE)
+                queue_console_text(upgrade_process.pid, "y\r")
+                assert upgrade_process.wait(timeout=30) == 0
+                eventually(lambda: not upgrade_temp.exists())
+                assert (installed_data / "account.conf").read_bytes() == original_account
+                eventually(lambda: b"RUNNING" in command("query", "DropbearWin").stdout)
+            finally:
+                if upgrade_process is not None and upgrade_process.poll() is None:
+                    upgrade_process.terminate()
+                    upgrade_process.wait(timeout=10)
+                shutil.rmtree(upgrade_temp, ignore_errors=True)
+
             with connect(port, password) as client:
                 assert execute(client, "echo installed")[0].strip() == b"installed"
             assert (installed_data / "hostkey_ed25519").is_file()
@@ -557,16 +595,18 @@ def interactive_register_test(executable):
             assert (installed_data / "account.conf").read_bytes() == original_account
             assert (installed_data / "hostkey_ed25519").is_file()
         finally:
-            if process.poll() is None:
+            if process is not None and process.poll() is None:
                 process.terminate()
-            process.wait(timeout=10)
+            if process is not None:
+                process.wait(timeout=10)
             command("stop", "DropbearWin", check=False)
             command("delete", "DropbearWin", check=False)
             eventually(lambda: command("query", "DropbearWin", check=False).returncode != 0,
                        timeout=20)
             shutil.rmtree(install_dir, ignore_errors=True)
             shutil.rmtree(installed_data, ignore_errors=True)
-    print("PASS: portable EXE and account migrated; installed service uses ProgramData", flush=True)
+            shutil.rmtree(foreign_temp, ignore_errors=True)
+    print("PASS: foreign service replaced; installed EXE upgraded with ProgramData preserved", flush=True)
 
 
 if __name__ == "__main__":
