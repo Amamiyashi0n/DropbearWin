@@ -6,6 +6,23 @@ Skill 位于 `skills/dropbear-win/`，MCP 入口位于 `tools/dropbear_mcp.py`�
 
 ## 安装
 
+EXE 已内嵌完整 Skill、MCP 桥接源码和会话辅助脚本。安装或升级时，自动将
+`SKILL.md`、`mcp.json`、`dropbear_mcp.py`、`windows_exec.py`、`requirements-mcp.txt`、
+`session_screenshot.ps1`、`session_display.ps1`、`mcp-reference.md`、`agent-mcp.md`
+和 `bundle-manifest.json` 平铺释放到 EXE 的安装目录。
+卸载时按内嵌白名单清理这些文件，默认保留 ProgramData 中的账号和主机密钥。
+安装失败会回退已更换的资源。无需再手工向目标机复制目录。
+
+通过 SSH Manifest 的 `bundle_directory` 和 `bundle_manifest_path` 下载及校验整包，
+再按包内 `agent-mcp.md` 在连接端配置 MCP。绿色版可用
+`dropbear-win-x64.exe --export-agent-files C:\existing-folder` 导出同一组文件。
+Python 解释器和第三方依赖仍由连接端安装。
+
+发布包回归可用 Windows Python 执行
+`python tests/test_agent_bundle.py dist/dropbear-win-x64.exe`。
+Linux 可设置独立 `WINEPREFIX` 后加 `--wine` 测试两种 EXE；
+`--wine-uninstall` 在未安装 DropbearWin 的隔离 Wine 环境验证默认保留数据和彻底卸载。
+
 在仓库根目录执行（连接端需要 Python 3.10+）：
 
 ```sh
@@ -71,8 +88,9 @@ OpenSSH 客户端显示在 stderr；不会把指引混入命令的 stdout、SFTP
 SDK 客户端可能需要读取认证 Banner API（例如 Paramiko `Transport.get_banner()`）。
 静默模式和部分客户端可能隐藏此消息。
 
-服务启动时在数据目录生成 `SKILL.md` 和 `mcp.json`（安装版通常为
-`C:\ProgramData\DropbearWin`，绿色版为 EXE 旁 `dropbear-win-data`）。这些文件由 EXE
+安装版的 `SKILL.md` 和 `mcp.json` 位于 EXE 安装目录（通常为
+`C:\Program Files\DropbearWin`），绿色版启动时将整包生成到 EXE 旁
+`dropbear-win-data`。旧版 ProgramData 中的发现文件在升级成功后清理。这些文件由 EXE
 维护，随版本更新覆盖，不供用户手工编辑。认证 Banner 给出路径和发现命令：
 
 ```sh

@@ -4,6 +4,15 @@ The repository's `tools/dropbear_mcp.py` runs on the Agent/client machine as a
 stdio MCP server using the official Python MCP SDK v1 API and Paramiko. Windows
 only needs the existing DropbearWin EXE with probe v2 and the embedded guide.
 
+The EXE embeds the bridge, both session helpers, Skill, this reference and an MCP
+descriptor. Installation/upgrade extracts a flat bundle into the EXE's install
+directory, and uninstall removes it. Discover `bundle_directory` and
+`bundle_manifest_path` with `__dropbear_win_manifest__`, then download the listed
+files over SFTP and verify their SHA-256. In this bundle the scripts and
+`requirements-mcp.txt` are siblings; follow `agent-mcp.md` for client setup.
+`--export-agent-files EXISTING_DIRECTORY` also exports the embedded bundle
+without installing a service. No Python interpreter/dependencies are bundled.
+
 Create a Python 3.10+ virtual environment and install `tools/requirements-mcp.txt`.
 Configure the MCP host to run that environment's Python with the absolute path
 to `tools/dropbear_mcp.py`. No HTTP listener or target-side Python is needed.

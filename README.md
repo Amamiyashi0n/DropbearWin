@@ -217,8 +217,9 @@ ssh -p 22 user@host __dropbear_win_probe__
 会公布该入口，但普通 SSH 协议不会强制客户端自动读取；Agent 或连接包装器应在规划
 Windows 工作前主动执行它。
 
-真实的 `SKILL.md` 与 `mcp.json` 在服务启动时生成到数据目录，安装版通常位于
-`C:\ProgramData\DropbearWin`。`__dropbear_win_manifest__` 返回文件路径及 SHA-256，
+完整 Skill、MCP 桥接源码、截图/分辨率脚本和说明随构造内嵌到 EXE。安装和升级时
+平铺释放到 `C:\Program Files\DropbearWin`，卸载时一起清理；绿色版启动时发布到
+EXE 旁的数据目录。`__dropbear_win_manifest__` 返回文件路径及 SHA-256，
 Agent 可据此跟踪内容变化并重新加载；特殊读取命令与 SFTP 返回相同内容。
 
 `__dropbear_win_probe__` 返回版本化 JSON，包含 `os=windows`、`shell`、`pty=false`、
@@ -397,6 +398,10 @@ Banner 还会给出 `--desktop-launch --session ID --expect-user USER` 示例；
 卸载请在目标机本地运行安装目录中的
 `uninstall-dropbear-service.cmd`，或执行安装 EXE 的 `--uninstall`；默认保留账号
 和主机密钥，附加 `--purge-data` 才会删除安装数据。
+Skill、MCP 桥接和截图/分辨率辅助脚本也在安装时从 EXE 自动释放到安装目录，
+升级时刷新、失败时回退，卸载时按内嵌文件清单删除。安装目录中的其他文件保留。
+包内 `agent-mcp.md` 提供连接端配置方法；Python 和 MCP 依赖仍在连接端安装。
+可用 `--export-agent-files 已存在的目录` 单独导出内嵌整包，无需安装服务。
 
 直接在控制台运行 EXE(不需要任何参数)时，程序会在账号就绪后询问是否把当前
 程序注册为 Windows 服务 `DropbearWin`：回答 `y` 会执行同样的 C 盘迁移并注册

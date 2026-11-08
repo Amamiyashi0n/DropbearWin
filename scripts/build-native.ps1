@@ -158,6 +158,7 @@ command -v clang
 export PATH='${toolchainUnix}:/usr/bin'
 cd '$buildUnix'
 mkdir -p obj
+python3 '$sourceUnix/../../scripts/embed-agent-bundle.py' '$buildUnix/agent-bundle.generated.h'
 windres -I '$windowsResourceUnix' -i '$windowsResourceUnix/dropbear-win.rc' \
   -o '$buildUnix/obj/dropbear-win-manifest.o' -O coff
 export ac_cv_c_undeclared_builtin_options='none needed'

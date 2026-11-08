@@ -41,7 +41,7 @@ _COMMONOBJS=dbutil.o buffer.o dbhelpers.o \
 		dss.o bignum.o \
 		signkey.o rsa.o dbrandom.o \
 		queue.o \
-		win-account.o win32-compat.o win32-process.o win-sftp.o win-service.o win-resources.o win-port.o win-log.o \
+		win-account.o win32-compat.o win32-process.o win-sftp.o win-service.o win-agent-bundle.o win-resources.o win-port.o win-log.o \
 		atomicio.o compat.o fake-rfc2553.o \
 		ltc_prng.o ecc.o ecdsa.o sk-ecdsa.o crypto_desc.o \
 		curve25519.o ed25519.o sk-ed25519.o \
@@ -163,6 +163,9 @@ endif
 all: $(TARGETS)
 
 $(OBJ_DIR)/win-service.o: @srcdir@/../../src/windows/win-service.c $(HEADERS) | $(OBJ_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(srcdir) -c $< -o $@
+
+$(OBJ_DIR)/win-agent-bundle.o: @srcdir@/../../src/windows/win-agent-bundle.c agent-bundle.generated.h $(HEADERS) | $(OBJ_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(srcdir) -c $< -o $@
 
 $(OBJ_DIR)/win-resources.o: @srcdir@/../../src/windows/win-resources.c $(HEADERS) | $(OBJ_DIR)

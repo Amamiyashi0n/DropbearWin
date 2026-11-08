@@ -3,6 +3,7 @@
 #ifdef DROPBEAR_WIN32_NATIVE
 #include "win32-compat.h"
 #include "win-account.h"
+#include "win-agent-bundle.h"
 #include <shellapi.h>
 #include <sddl.h>
 
@@ -407,7 +408,9 @@ static void clean_portable_data(const wchar_t *source_exe, const char *source_di
 	char portable[MAX_PATH], source[MAX_PATH];
 	wchar_t executable[32768], *slash;
 	const char *names[] = { "account.conf", "hostkey_ed25519", "dropbear.pid", "service.log",
-		"SKILL.md", "mcp.json", "SKILL.md.tmp", "mcp.json.tmp" };
+		"SKILL.md", "mcp.json", "SKILL.md.tmp", "mcp.json.tmp", "bundle-manifest.json",
+		"dropbear_mcp.py", "windows_exec.py", "requirements-mcp.txt", "session_screenshot.ps1",
+		"session_display.ps1", "mcp-reference.md", "agent-mcp.md" };
 	size_t i;
 	if (!_stricmp(source_dir, target_dir) || wcslen(source_exe) >= 32768) return;
 	wcscpy(executable, source_exe);
@@ -545,6 +548,7 @@ static int install_registered_service(int argc, char **argv, DWORD start_type) {
 	int marker_length, backup_length, result = 1, copied_exe = 0, backed_up_exe = 0;
 	int created_account = 0, created_hostkey = 0, created_marker = 0;
 	int created_data_dir = 0;
+	struct dropbear_win_bundle_transaction *bundle = NULL;
 
 	length = GetModuleFileNameW(NULL, source_exe, 32768);
 	if (!length || length >= 32768 ||
@@ -667,6 +671,7 @@ static int install_registered_service(int argc, char **argv, DWORD start_type) {
 		CloseHandle(marker_file);
 		created_marker = 1;
 	}
+	if (!dropbear_win_bundle_begin(install_dir, &bundle)) goto done;
 	command_line = dropbear_win_build_service_command_line(installed_exe, argc, argv);
 	if (!command_line) goto done;
 	if (service) {
@@ -702,6 +707,8 @@ static int install_registered_service(int argc, char **argv, DWORD start_type) {
 done:
 	if (service) CloseServiceHandle(service);
 	if (manager) CloseServiceHandle(manager);
+	if (!dropbear_win_bundle_finish(bundle, !result))
+		fputs("Some agent resource backup files require manual cleanup.\n", stderr);
 	if (result) {
 		if (created_marker) DeleteFileW(marker);
 		if (backed_up_exe && !CopyFileW(backup_exe, installed_exe, FALSE))
@@ -711,6 +718,14 @@ done:
 		if (created_account) DeleteFileA(account_path);
 		if (created_data_dir) RemoveDirectoryA(installed_data);
 	} else {
+		/* Old builds published these generated snapshots in ProgramData. */
+		const char *old_names[] = { "SKILL.md", "mcp.json", "SKILL.md.tmp", "mcp.json.tmp" };
+		size_t i;
+		for (i = 0; i < sizeof(old_names) / sizeof(old_names[0]); i++) {
+			char old_path[MAX_PATH];
+			if (snprintf(old_path, sizeof(old_path), "%s\\%s", installed_data, old_names[i]) < (int)sizeof(old_path))
+				DeleteFileA(old_path);
+		}
 		if (_wcsicmp(source_exe, installed_exe) &&
 				!launch_portable_cleanup(installed_exe, source_exe, expected_portable)) {
 			clean_portable_data(source_exe, expected_portable, installed_data);
@@ -740,7 +755,9 @@ static int remove_installed_file(const wchar_t *path, int *restart_required) {
 
 static int remove_installed_data(const char *directory) {
 	const char *names[] = { "account.conf", "hostkey_ed25519", "dropbear.pid", "service.log",
-		"SKILL.md", "mcp.json", "SKILL.md.tmp", "mcp.json.tmp" };
+		"SKILL.md", "mcp.json", "SKILL.md.tmp", "mcp.json.tmp", "bundle-manifest.json",
+		"dropbear_mcp.py", "windows_exec.py", "requirements-mcp.txt", "session_screenshot.ps1",
+		"session_display.ps1", "mcp-reference.md", "agent-mcp.md" };
 	char path[MAX_PATH];
 	size_t i;
 	for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
@@ -839,6 +856,13 @@ int dropbear_win_uninstall(int argc, char **argv) {
 	if (purge_data && !remove_installed_data(installed_data)) {
 		fputs("Installed data could not be fully deleted; continuing program removal.\n", stderr);
 		purge_failed = 1;
+	}
+	/* Only the compiled-in names are owned by the installer; preserve other files. */
+	for (i = 0; dropbear_win_bundle_name((unsigned int)i); i++) {
+		other_length = _snwprintf(other_exe, 32768, L"%ls\\%ls", install_dir,
+			dropbear_win_bundle_name((unsigned int)i));
+		if (other_length <= 0 || other_length >= 32768 ||
+				!remove_installed_file(other_exe, &restart_required)) goto done;
 	}
 	if (!remove_installed_file(script, &restart_required)) goto done;
 	/* A second architecture may have been copied into the same install folder. */

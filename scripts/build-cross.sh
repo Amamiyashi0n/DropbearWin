@@ -142,6 +142,7 @@ build_target() {
     if ((clean)); then rm -rf -- "$build_dir"; fi
     mkdir -p "$build_dir"
     mkdir -p "$build_dir/obj"
+    python3 "$project_root/scripts/embed-agent-bundle.py" "$build_dir/agent-bundle.generated.h"
     local manifest_resource=$build_dir/obj/dropbear-win-manifest.o
     "$triplet-windres" -I "$project_root/src/windows" -i "$project_root/src/windows/dropbear-win.rc" \
         -o "$manifest_resource" -O coff

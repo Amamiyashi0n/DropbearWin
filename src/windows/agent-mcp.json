@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "name": "dropbear-win",
+  "transport": "stdio",
+  "location": "client-side",
+  "entrypoint": "dropbear_mcp.py",
+  "requirements": "requirements-mcp.txt",
+  "installation_guide": "agent-mcp.md",
+  "bundle_manifest": "bundle-manifest.json",
+  "python": ">=3.10",
+  "auto_install": false,
+  "environment": ["DROPBEAR_MCP_HOST", "DROPBEAR_MCP_USER", "DROPBEAR_MCP_PASSWORD"],
+  "tools": ["dropbear_context", "dropbear_guide", "dropbear_manifest", "dropbear_sessions", "dropbear_run_command", "dropbear_exec", "dropbear_desktop_launch", "dropbear_session_screenshot", "dropbear_session_display", "dropbear_session_set_resolution"],
+  "resources": ["dropbear://context", "dropbear://guide", "dropbear://manifest"],
+  "prompt": "dropbear_onboarding",
+  "ssh_discovery": "__dropbear_win_manifest__"
+}

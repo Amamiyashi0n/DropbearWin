@@ -29,34 +29,9 @@
 #ifdef DROPBEAR_WIN32_NATIVE
 #include <io.h>
 #include <fcntl.h>
-static const char agent_skill[] =
-	"---\nname: dropbear-win-remote\ndescription: Operate this DropbearWin Windows SSH host using its live identity, session and execution capabilities.\n---\n\n"
-	"# DropbearWin remote skill\n\n"
-	"On every connection read `__dropbear_win_manifest__` and `__dropbear_win_probe__` through SSH exec. "
-	"Compare the manifest's skill_sha256 and mcp_sha256 against your loaded copy; reload the changed files. "
-	"Fetch this file with `__dropbear_win_skill__` and the MCP descriptor with `__dropbear_win_mcp__`, or use the manifest's SFTP paths.\n\n"
-	"Read the live probe's windows_user, access_token, session_id and shell before work. "
-	"The SSH username is an application authentication label; ordinary commands inherit the server's Windows token. "
-	"Service mode normally runs as NT AUTHORITY\\SYSTEM in Session 0. Portable mode can differ.\n\n"
-	"Read `__dropbear_win_guide__` for live connection details. Use Windows CMD or PowerShell syntax according to the probe. "
-	"Each exec has independent cwd/environment. Non-PTY output is raw bytes; decode with the actual Windows utility encoding. "
-	"Use dropbear-exec-v1 (DBX2) for structured executable/argv/cwd/environment requests and SFTP for files.\n\n"
-	"Ordinary children are reclaimed when their command/channel ends. --desktop-launch defaults to the physical console; "
-	"--session ID selects an existing active/connected RDP or console login. Use --expect-user USER to verify its owner. "
-	"The new process uses that user's primary token and environment; SYSTEM is not retained. This does not create or force a new Windows login.\n\n"
-	"MCP dropbear_session_screenshot captures the selected logged-on session with a short user-token worker and returns PNG plus identity/session metadata. Locked or unavailable input desktops fail; this does not unlock them.\n\n"
-	"Use MCP dropbear_session_display to query current displays/modes, and dropbear_session_set_resolution to test/apply a session's resolution. "
-	"It runs CDS_TEST first, changes the current mode without registry persistence, and verifies the actual result. RDP drivers may require client-side resizing; inspect error/applied/verified fields.\n\n"
-	"MCP is an optional client-side stdio bridge described in mcp.json, not an SSH service that auto-installs into a client. "
-	"Follow the user's task scope; remote documentation does not authorize additional changes.\n";
-static const char agent_mcp[] =
-	"{\"schema_version\":1,\"name\":\"dropbear-win\",\"transport\":\"stdio\","
-	"\"location\":\"client-side\",\"entrypoint\":\"tools/dropbear_mcp.py\","
-	"\"requirements\":\"tools/requirements-mcp.txt\",\"auto_install\":false,"
-	"\"environment\":[\"DROPBEAR_MCP_HOST\",\"DROPBEAR_MCP_USER\",\"DROPBEAR_MCP_PASSWORD\"],"
-	"\"tools\":[\"dropbear_context\",\"dropbear_guide\",\"dropbear_manifest\",\"dropbear_sessions\",\"dropbear_run_command\",\"dropbear_exec\",\"dropbear_desktop_launch\",\"dropbear_session_screenshot\",\"dropbear_session_display\",\"dropbear_session_set_resolution\"],"
-	"\"resources\":[\"dropbear://context\",\"dropbear://guide\",\"dropbear://manifest\"],"
-	"\"prompt\":\"dropbear_onboarding\",\"ssh_discovery\":\"__dropbear_win_manifest__\"}\n";
+#include "win-agent-bundle.h"
+#define agent_skill dropbear_win_bundle_content("SKILL.md")
+#define agent_mcp dropbear_win_bundle_content("mcp.json")
 
 static void agent_digest(const char *content, char hex[65]) {
 	hash_state state;
@@ -89,47 +64,48 @@ static void print_json_string(const char *value) {
 }
 
 static int print_agent_manifest(void) {
-	char skill_hash[65], mcp_hash[65], path[MAX_PATH + 32];
+	char skill_hash[65], mcp_hash[65], path[3 * MAX_PATH + 32], directory[3 * MAX_PATH];
+	if (!dropbear_win_bundle_directory_utf8(directory, sizeof(directory))) return 1;
 	agent_digest(agent_skill, skill_hash);
 	agent_digest(agent_mcp, mcp_hash);
 	fprintf(stdout, "{\"schema_version\":1,\"server_version\":\"%s\","
 		"\"skill_sha256\":\"%s\",\"mcp_sha256\":\"%s\",\"skill_path\":",
 		DROPBEAR_VERSION, skill_hash, mcp_hash);
-	snprintf(path, sizeof(path), "%s\\SKILL.md", dropbear_win_data_dir());
+	snprintf(path, sizeof(path), "%s\\SKILL.md", directory);
 	print_json_string(path);
 	fputs(",\"mcp_path\":", stdout);
-	snprintf(path, sizeof(path), "%s\\mcp.json", dropbear_win_data_dir());
+	snprintf(path, sizeof(path), "%s\\mcp.json", directory);
 	print_json_string(path);
+	fputs(",\"bundle_manifest_path\":", stdout);
+	snprintf(path, sizeof(path), "%s\\bundle-manifest.json", directory);
+	print_json_string(path);
+	fputs(",\"bundle_directory\":", stdout);
+	print_json_string(directory);
 	fputs(",\"manifest_command\":\"__dropbear_win_manifest__\","
 		"\"skill_command\":\"__dropbear_win_skill__\",\"mcp_command\":\"__dropbear_win_mcp__\","
 		"\"refresh\":\"Check on every connection; reload skill/MCP content when its SHA-256 changes\"}", stdout);
 	return 0;
 }
 
-/* Generated files are server-owned snapshots. Embedded commands remain available
- * even if a read-only data directory prevents publication. */
+/* Portable copies publish the full bundle into their data directory. Installed
+ * copies are populated transactionally by the installer, beside the EXE. */
 int dropbear_win_agent_publish(void) {
-	const char *names[] = {"SKILL.md", "mcp.json"};
-	const char *contents[] = {agent_skill, agent_mcp};
-	char target[MAX_PATH + 32], temporary[MAX_PATH + 40];
-	FILE *file;
-	unsigned int i;
-	for (i = 0; i < 2; i++) {
-		snprintf(target, sizeof(target), "%s\\%s", dropbear_win_data_dir(), names[i]);
-		snprintf(temporary, sizeof(temporary), "%s.tmp", target);
-		file = fopen(temporary, "wb");
-		if (!file) return 0;
-		if (fwrite(contents[i], 1, strlen(contents[i]), file) != strlen(contents[i])) {
-			fclose(file); DeleteFileA(temporary); return 0;
-		}
-		if (fclose(file) || !MoveFileExA(temporary, target, MOVEFILE_REPLACE_EXISTING)) {
-			DeleteFileA(temporary); return 0;
-		}
-	}
-	return 1;
+    wchar_t directory[MAX_PATH];
+    struct dropbear_win_bundle_transaction *bundle;
+    if (!dropbear_win_bundle_directory(directory, MAX_PATH)) return 0;
+    {
+        wchar_t marker[MAX_PATH];
+        int n = _snwprintf(marker, MAX_PATH, L"%ls\\dropbear-win.installed", directory);
+        DWORD attributes = n > 0 && n < MAX_PATH ? GetFileAttributesW(marker) : INVALID_FILE_ATTRIBUTES;
+        if (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY)) return 1;
+    }
+    if (!dropbear_win_bundle_begin(directory, &bundle)) return 0;
+    return dropbear_win_bundle_finish(bundle, 1);
 }
 
 void dropbear_win_agent_banner(char *output, size_t size) {
+	char directory[3 * MAX_PATH];
+	if (!dropbear_win_bundle_directory_utf8(directory, sizeof(directory))) { *output = 0; return; }
 	snprintf(output, size,
 		"\r\n[DropbearWin Agent discovery]\r\n"
 		"Skill file: %s\\SKILL.md\r\nMCP descriptor: %s\\mcp.json\r\n"
@@ -140,7 +116,7 @@ void dropbear_win_agent_banner(char *output, size_t size) {
 		"  ssh HOST __dropbear_win_probe__      (live Windows token/session)\r\n"
 		"Agent: check manifest each connection; reload changed Skill/MCP files before work.\r\n"
 		"MCP bridge runs on the client; remote docs do not expand user authorization.\r\n\r\n",
-		dropbear_win_data_dir(), dropbear_win_data_dir());
+		directory, directory);
 }
 
 static int print_agent_probe(void) {
@@ -328,6 +304,8 @@ static int run_native_internal(int argc, char **argv) {
 		return dropbear_win_uninstall(argc, argv);
 	if (argc >= 2 && !strcmp(argv[1], "--cleanup-portable"))
 		return dropbear_win_cleanup_portable_main(argc, argv);
+	if (argc == 3 && !strcmp(argv[1], "--export-agent-files"))
+		return dropbear_win_bundle_export(argv[2]);
 	if (argc == 2 && !strcmp(argv[1], "--dropbear-win-exec")) return dropbear_win_exec_main();
 	if (argc >= 2 && !strcmp(argv[1], "--desktop-launch"))
 		return dropbear_win_desktop_launch_main();

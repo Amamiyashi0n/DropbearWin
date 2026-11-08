@@ -18,6 +18,12 @@ SSH authentication also publishes an Agent discovery banner, including for non-P
 commands and SFTP. It points to the actual remote `SKILL.md` and `mcp.json`.
 Some SDKs expose this through their authentication-banner API rather than text.
 
+The EXE embeds the complete client bundle. Installation/upgrade extracts it flat
+beside the installed EXE; uninstall removes those generated files. The manifest's
+`bundle_manifest_path` lists file sizes and SHA-256 for an SFTP download to the
+client. Follow `agent-mcp.md` there for setup. The bundle contains bridge source
+and helpers; Python and its dependencies are still required on the client.
+
 With the `dropbear-win` MCP server, call `dropbear_manifest`, `dropbear_context` and `dropbear_guide`.
 The manifest tool loads remote Skill/MCP content and verifies SHA-256. On each
 connection compare its `skill_sha256` and `mcp_sha256` with the loaded version;
