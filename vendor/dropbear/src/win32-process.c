@@ -739,46 +739,88 @@ static void token_status(char *output, size_t output_size) {
 	if (token) CloseHandle(token);
 }
 
+void dropbear_win_runtime_security(char *identity, size_t identity_size,
+		char *token_text, size_t token_size, DWORD *session_id) {
+	HANDLE process_token = NULL;
+	TOKEN_USER *token_user = NULL;
+	PSID system_sid = NULL;
+	DWORD token_user_size = 0;
+	DWORD name_size = 256, domain_size = 256;
+	wchar_t name[256], domain[256], combined[520];
+	SID_NAME_USE sid_type;
+	SID_IDENTIFIER_AUTHORITY nt_authority = SECURITY_NT_AUTHORITY;
+	int local_system = 0;
+
+	if (identity && identity_size) snprintf(identity, identity_size, "unknown");
+	if (token_text && token_size) token_status(token_text, token_size);
+	if (session_id && !ProcessIdToSessionId(GetCurrentProcessId(), session_id))
+		*session_id = 0xffffffffUL;
+	if (!identity || !identity_size ||
+			!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &process_token)) goto done;
+	GetTokenInformation(process_token, TokenUser, NULL, 0, &token_user_size);
+	if (!token_user_size) goto done;
+	token_user = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, token_user_size);
+	if (!token_user || !GetTokenInformation(process_token, TokenUser, token_user,
+			token_user_size, &token_user_size)) goto done;
+	if (AllocateAndInitializeSid(&nt_authority, 1, SECURITY_LOCAL_SYSTEM_RID,
+			0, 0, 0, 0, 0, 0, 0, &system_sid))
+		local_system = EqualSid(token_user->User.Sid, system_sid);
+	if (local_system) {
+		snprintf(identity, identity_size, "NT AUTHORITY\\SYSTEM");
+		if (token_text && token_size)
+			snprintf(token_text, token_size,
+				"LocalSystem / full SYSTEM (System integrity; NOT an elevated Administrator token)");
+		goto done;
+	}
+	if (!LookupAccountSidW(NULL, token_user->User.Sid, name, &name_size,
+			domain, &domain_size, &sid_type)) goto done;
+	if (domain[0]) _snwprintf(combined, sizeof(combined) / sizeof(combined[0]),
+		L"%ls\\%ls", domain, name);
+	else _snwprintf(combined, sizeof(combined) / sizeof(combined[0]), L"%ls", name);
+	wide_to_utf8(combined, identity, identity_size);
+done:
+	if (system_sid) FreeSid(system_sid);
+	if (token_user) HeapFree(GetProcessHeap(), 0, token_user);
+	if (process_token) CloseHandle(process_token);
+}
+
 static int write_session_motd(int output_fd, const wchar_t *shell,
 		const char *ssh_user, const char *terminal, const char *connection) {
 	char motd[8192];
 	char resources[1024];
 	char hostname[512] = "unknown";
-	char windows_user[512] = "unknown";
-	char domain[512] = "";
 	char identity[1050];
+	char executable_path[MAX_PATH * 3] = "dropbear-win.exe";
 	char shell_utf8[MAX_PATH * 3];
 	char cwd[MAX_PATH * 3] = "unknown";
 	char os[160];
 	char token[160];
 	char codepage_name[256] = "Windows OEM encoding";
 	char safe_ssh_user[256];
+	char safe_executable[MAX_PATH * 3];
 	char safe_terminal[256];
 	char safe_connection[512];
 	wchar_t wide_buffer[MAX_PATH];
-	DWORD wide_size;
+	DWORD wide_size, session_id = 0xffffffffUL;
 	CPINFOEXW codepage_info;
 	size_t used = 0;
 
 	wide_size = sizeof(wide_buffer) / sizeof(wide_buffer[0]);
 	if (GetComputerNameW(wide_buffer, &wide_size)) wide_to_utf8(wide_buffer, hostname, sizeof(hostname));
-	wide_size = sizeof(wide_buffer) / sizeof(wide_buffer[0]);
-	if (GetUserNameW(wide_buffer, &wide_size)) wide_to_utf8(wide_buffer, windows_user, sizeof(windows_user));
-	wide_size = GetEnvironmentVariableW(L"USERDOMAIN", wide_buffer,
+	wide_size = GetModuleFileNameW(NULL, wide_buffer,
 		sizeof(wide_buffer) / sizeof(wide_buffer[0]));
 	if (wide_size && wide_size < sizeof(wide_buffer) / sizeof(wide_buffer[0]))
-		wide_to_utf8(wide_buffer, domain, sizeof(domain));
-	if (domain[0]) snprintf(identity, sizeof(identity), "%s\\%s", domain, windows_user);
-	else snprintf(identity, sizeof(identity), "%s", windows_user);
+		wide_to_utf8(wide_buffer, executable_path, sizeof(executable_path));
 	wide_to_utf8(shell, shell_utf8, sizeof(shell_utf8));
 	if (GetCurrentDirectoryW(sizeof(wide_buffer) / sizeof(wide_buffer[0]), wide_buffer))
 		wide_to_utf8(wide_buffer, cwd, sizeof(cwd));
 	windows_version(os, sizeof(os));
-	token_status(token, sizeof(token));
+	dropbear_win_runtime_security(identity, sizeof(identity), token, sizeof(token), &session_id);
 	memset(&codepage_info, 0, sizeof(codepage_info));
 	if (GetCPInfoExW(GetOEMCP(), 0, &codepage_info))
 		wide_to_utf8(codepage_info.CodePageName, codepage_name, sizeof(codepage_name));
 	sanitize_motd_value(ssh_user, safe_ssh_user, sizeof(safe_ssh_user));
+	sanitize_motd_value(executable_path, safe_executable, sizeof(safe_executable));
 	sanitize_motd_value(terminal, safe_terminal, sizeof(safe_terminal));
 	sanitize_motd_value(connection, safe_connection, sizeof(safe_connection));
 
@@ -791,9 +833,31 @@ static int write_session_motd(int output_fd, const wchar_t *shell,
 		dropbear_win_binary_architecture());
 	append_motd(motd, sizeof(motd), &used, " Compatibility: %s\r\n",
 		dropbear_win_compatibility_profile());
-	append_motd(motd, sizeof(motd), &used, " SSH user:     %s\r\n", safe_ssh_user[0] ? safe_ssh_user : "unknown");
-	append_motd(motd, sizeof(motd), &used, " Windows user: %s\r\n", identity);
+	append_motd(motd, sizeof(motd), &used,
+		" Security context below is authoritative for ordinary SSH commands:\r\n");
+	append_motd(motd, sizeof(motd), &used,
+		" SSH user:     %s (Dropbear authentication only; NOT a Windows account)\r\n",
+		safe_ssh_user[0] ? safe_ssh_user : "unknown");
+	append_motd(motd, sizeof(motd), &used, " Windows user: %s (effective command identity)\r\n", identity);
 	append_motd(motd, sizeof(motd), &used, " Access token: %s\r\n", token);
+	append_motd(motd, sizeof(motd), &used, " Session ID:   %lu (%s)\r\n",
+		(unsigned long)session_id,
+		session_id == 0xffffffffUL ? "unavailable" :
+			(session_id == 0 ? "service/non-interactive" : "interactive or user session"));
+	append_motd(motd, sizeof(motd), &used,
+		" Command rule: ordinary SSH commands inherit the Windows user/token above and remain in this session.\r\n");
+	append_motd(motd, sizeof(motd), &used,
+		" Desktop GUI:  \"%s\" --desktop-launch \"C:\\absolute\\program.exe\" [args]\r\n",
+		safe_executable);
+	if (!strcmp(identity, "NT AUTHORITY\\SYSTEM")) {
+		append_motd(motd, sizeof(motd), &used,
+			" Permission switch: GUI uses the active console user's primary token/environment; SSH SYSTEM is NOT retained.\r\n");
+	} else {
+		append_motd(motd, sizeof(motd), &used,
+			" Permission switch: --desktop-launch is intended for an installed LocalSystem service; this SSH token is not SYSTEM.\r\n");
+	}
+	append_motd(motd, sizeof(motd), &used,
+		" Session target: active physical-console user only; switch that console login for another user (no arbitrary/RDP Session ID).\r\n");
 	append_motd(motd, sizeof(motd), &used, " Shell:        %s\r\n", shell_utf8);
 	append_motd(motd, sizeof(motd), &used, " Terminal:     %s (%s)\r\n",
 		safe_terminal[0] ? safe_terminal : "not requested",

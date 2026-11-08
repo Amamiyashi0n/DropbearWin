@@ -552,14 +552,24 @@ static void print_all_ipv4_endpoints(const char *username, const char *port) {
 
 static void print_windows_startup_status(void) {
 	char username[128] = "user";
+	char windows_identity[1050], token[160];
+	DWORD session_id = 0xffffffffUL;
 	unsigned int i;
 	dropbear_win_account_name(username, sizeof(username));
+	dropbear_win_runtime_security(windows_identity, sizeof(windows_identity),
+		token, sizeof(token), &session_id);
 
 	fputs("\n============================================================\n", stdout);
 	fputs("[OK] Dropbear SSH server started successfully\n", stdout);
 	fprintf(stdout, "PID:       %d\n", getpid());
-	fprintf(stdout, "SSH user:  %s\n", username);
-	fputs("Access:    SSH login uses this server's Windows access token, not a Windows user account.\n", stdout);
+	fprintf(stdout, "SSH auth:  %s (Dropbear account only; NOT a Windows account)\n", username);
+	fprintf(stdout, "Windows:   %s (effective command identity)\n", windows_identity);
+	fprintf(stdout, "Token:     %s\n", token);
+	fprintf(stdout, "Session:   %lu (%s)\n", (unsigned long)session_id,
+		session_id == 0xffffffffUL ? "unavailable" :
+			(session_id == 0 ? "service/non-interactive" : "interactive or user session"));
+	fputs("Access:    Ordinary SSH commands inherit the Windows identity/token above and remain in this session.\n",
+		stdout);
 	fprintf(stdout, "Shell:     %s\n", dropbear_win_shell());
 	fprintf(stdout, "Binary:    %s\n", dropbear_win_binary_architecture());
 	fprintf(stdout, "Compat:    %s\n", dropbear_win_compatibility_profile());

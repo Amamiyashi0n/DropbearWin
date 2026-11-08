@@ -81,8 +81,11 @@ def run(executable, backend):
                         assert len(banner) < 16384, banner
                     assert b"Welcome to Dropbear for Windows" in banner, banner
                     for field in (b"Host:", b"System:", b"SSH user:", b"Windows user:",
+                                  b"Access token:", b"Session ID:", b"Command rule:",
+                                  b"Desktop GUI:", b"Permission switch:", b"Session target:",
                                   b"Shell:", b"Working dir:", b"Snapshot:", b"Disk (cwd):"):
                         assert field in banner, (field, banner)
+                    assert b"Dropbear authentication only; NOT a Windows account" in banner, banner
                     cpu = re.search(rb"([\d.]+)% busy", banner)
                     assert cpu and 0 <= float(cpu[1]) <= 100, banner
                     assert re.search(rb"Memory: +[\d.]+ / [\d.]+ GiB used", banner), banner

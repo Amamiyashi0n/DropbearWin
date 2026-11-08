@@ -341,12 +341,16 @@ SSH 账号，然后将 EXE 复制到系统盘的 `Program Files\DropbearWin`，�
 迁移到 `%ProgramData%\DropbearWin`，注册自动启动服务 `DropbearWin` 指向安装副本。
 复制及注册成功后清理原 EXE 旁的便携数据；仍被当前进程使用的原 EXE 会安排在下次
 重启时删除。若服务已存在，先停止服务再重新安装；目标位置已有不同账号或主机密钥
-时安装会中止并保留两份数据。安装命令不立即启动服务；可运行
-`sc start DropbearWin` 启动，用 `sc qc DropbearWin` 核对 `AUTO_START`。
+时安装会中止并保留两份数据。安装完成后会立即启动新服务；可运行
+`sc query DropbearWin` 检查运行状态，用 `sc qc DropbearWin` 核对 `AUTO_START`。
 
 Windows 不会永久记住一次 UAC 同意：以后手动启动 EXE 时仍可能提示；开机时由 SCM
 直接启动已注册的服务。默认服务以 LocalSystem 身份运行，SSH 登录后的命令和文件
-传输继承该身份。卸载请在目标机本地运行安装目录中的
+传输继承该身份。SSH 登录 Banner 会把 Dropbear 认证名与 Windows 实际身份分开显示，
+并标明访问令牌和 Windows Session ID；普通 SSH 命令以 Banner 中的 Windows 身份运行。
+Banner 还会给出 `--desktop-launch` 示例，并明确切到物理控制台用户 Session 后，新 GUI
+改用该用户的主令牌和环境，不再保留 SSH 的 SYSTEM 令牌；该命令不选择任意 RDP Session。
+卸载请在目标机本地运行安装目录中的
 `uninstall-dropbear-service.cmd`，或执行安装 EXE 的 `--uninstall`；默认保留账号
 和主机密钥，附加 `--purge-data` 才会删除安装数据。
 

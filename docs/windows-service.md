@@ -37,15 +37,23 @@ XP / Server 2003 上只禁用该命令，普通 SSH 服务和命令仍保持原�
 使用 `%ALLUSERSPROFILE%\Application Data\DropbearWin`。
 
 复制及注册成功后会清理原 EXE 旁的 `dropbear-win-data`；原 EXE 若仍被当前进程
-占用，将在下次重启时删除。安装失败时保留便携文件。已有服务必须先停止，且仅当
-它指向当前 EXE 或目标安装 EXE 时才允许更新；目标数据若与便携账号或主机密钥
-冲突，安装会中止。显式安装命令始终读取当前 EXE 旁的数据，不继承 SSH 服务的
+占用，将在下次重启时删除。安装失败时保留便携文件。已有旧版服务时会明确提示并
+在确认后停止、删除和替换；同名服务指向其他程序时也会明确警告，只有确认后才会
+接管。目标数据若与便携账号或主机密钥冲突，安装会中止。显式安装命令始终读取当前 EXE 旁的数据，不继承 SSH 服务的
 `DROPBEAR_WIN_DATA_DIR` / `DROPBEAR_WIN_ACCOUNT_FILE` 环境变量。
 安装后运行 `sc.exe qc DropbearWin`
-检查 `START_TYPE` 为 `AUTO_START`；需要立即启动时运行 `sc.exe start DropbearWin`。
+检查 `START_TYPE` 为 `AUTO_START`，运行 `sc.exe query DropbearWin` 检查服务已启动。
 安装目录中的 `uninstall-dropbear-service.cmd` 可执行配套卸载。服务启动不会
 弹出 UAC；以后手动运行 EXE 仍会按 Windows 规则请求提升，系统不会永久记住一次
 UAC 同意。XP/Server 2003 没有 UAC 时，需要从管理员会话运行安装命令。
+
+SSH 登录 Banner 中的 `SSH user` 只是 Dropbear 自有认证名，不是 Windows 账号。
+`Windows user`、`Access token` 和 `Session ID` 才是普通 SSH 命令的实际安全上下文；
+服务模式通常明确显示 `NT AUTHORITY\SYSTEM`、`LocalSystem / full SYSTEM`（并注明
+它不是普通的提权 Administrator 令牌）和
+`Session ID: 0 (service/non-interactive)`。同一 Banner 会显示当前 EXE 的
+`--desktop-launch` 调用方式和权限变化：新 GUI 使用物理控制台登录用户的主令牌与
+环境，不保留 SSH 的 SYSTEM 令牌，也不能按任意 Session ID 选择 RDP 会话。
 
 ## 交互式注册(免参数)
 
