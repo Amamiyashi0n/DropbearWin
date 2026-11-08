@@ -1,5 +1,5 @@
 /* Console/SCM fixture for the real EXE. Refuses an existing DropbearWin service.
- * Arguments: EXE PORT SERVICE_BINARY|- EXPECTED_PROMPT|- ANSWER(n|y)
+ * Arguments: EXE PORT SERVICE_BINARY|- EXPECTED_PROMPT|- ANSWER(n|y) [job-no-breakaway]
  * Run only in a disposable Windows/Wine environment. */
 #ifndef UNICODE
 #define UNICODE
@@ -48,6 +48,7 @@ int wmain(int argc, wchar_t **argv) {
     SC_HANDLE manager = NULL, service = NULL, existing;
     SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
     HANDLE output = NULL, input = INVALID_HANDLE_VALUE, console = INVALID_HANDLE_VALUE;
+    HANDLE job = NULL;
     STARTUPINFOW startup;
     PROCESS_INFORMATION child;
     SERVICE_STATUS status;
@@ -56,7 +57,7 @@ int wmain(int argc, wchar_t **argv) {
     DWORD written, code = 1;
     int result = 1, started = 0, answered = 0, username = 0, password = 0, confirm = 0, i;
     int want_prompt;
-    if (argc != 6) return 2;
+    if (argc != 6 && (argc != 7 || wcscmp(argv[6], L"job-no-breakaway"))) return 2;
     want_prompt = wcscmp(argv[4], L"-") != 0;
     WideCharToMultiByte(CP_UTF8, 0, argv[4], -1, expected, sizeof(expected), NULL, NULL);
     DuplicateHandle(GetCurrentProcess(), GetStdHandle(STD_OUTPUT_HANDLE), GetCurrentProcess(),
@@ -90,9 +91,17 @@ int wmain(int argc, wchar_t **argv) {
     startup.cb = sizeof(startup); startup.dwFlags = STARTF_USESTDHANDLES;
     startup.hStdInput = input; startup.hStdOutput = console; startup.hStdError = console;
     _snwprintf(command, 4096, L"\"%ls\" -p 127.0.0.1:%ls", argv[1], argv[2]);
-    if (!CreateProcessW(argv[1], command, NULL, NULL, TRUE, CREATE_NEW_PROCESS_GROUP,
+    if (!CreateProcessW(argv[1], command, NULL, NULL, TRUE,
+            CREATE_NEW_PROCESS_GROUP | (argc == 7 ? CREATE_SUSPENDED : 0),
             NULL, NULL, &startup, &child)) goto done;
     started = 1;
+    if (argc == 7) {
+        /* Default job limits prohibit CREATE_BREAKAWAY_FROM_JOB. The child
+         * must still be able to install and clean its portable files. */
+        job = CreateJobObjectW(NULL, NULL);
+        if (!job || !AssignProcessToJobObject(job, child.hProcess) ||
+                ResumeThread(child.hThread) == (DWORD)-1) goto done;
+    }
     for (i = 0; i < 400; i++) {
         snapshot(console, text, sizeof(text));
         if (!username && strstr(text, "SSH username:")) { type_text(input, L"setup-fixture\r"); username = 1; }
@@ -136,6 +145,7 @@ done:
         DeleteService(service); CloseServiceHandle(service);
     }
     if (manager) CloseServiceHandle(manager);
+    if (job) CloseHandle(job);
     if (input != INVALID_HANDLE_VALUE) CloseHandle(input);
     if (console != INVALID_HANDLE_VALUE) CloseHandle(console);
     if (output) CloseHandle(output);

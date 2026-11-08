@@ -50,7 +50,8 @@ def main():
                                    ("missing-marker", "Continue with the installation?"),
                                    ("upgrade", "Continue with the upgrade?"),
                                    ("foreign", "Continue with the replacement?"),
-                                   ("confirm-y", "Register this server")):
+                                   ("confirm-y", "Register this server"),
+                                   ("confirm-y-job", "Register this server")):
                 with tempfile.TemporaryDirectory(prefix="dropbear-setup-") as temp:
                     portable = Path(temp)
                     exe = portable / "dropbear-win-x64.exe"
@@ -76,16 +77,17 @@ def main():
                     elif mode == "upgrade": service_binary = winpath(target)
                     elif mode == "foreign": service_binary = r"C:\Windows\System32\cmd.exe"
                     else: service_binary = "-"
-                    answer = "y" if mode == "confirm-y" else "n"
+                    answer = "y" if mode.startswith("confirm-y") else "n"
+                    extra = ["job-no-breakaway"] if mode == "confirm-y-job" else []
                     result = subprocess.run(["wine", str(driver), winpath(exe), str(port), service_binary,
-                                             expected, answer], env=fixture_env, capture_output=True, timeout=50)
+                                             expected, answer] + extra, env=fixture_env, capture_output=True, timeout=50)
                     text = result.stdout.decode("utf-8", "replace")
                     assert result.returncode == 0, (artifact.name, mode, result.returncode, text, result.stderr)
                     if mode in ("portable-service", "first-run-portable-service", "new", "upgrade", "foreign"):
                         assert not (portable / "uninstall-dropbear-service.cmd").exists(), text
                     if mode == "first-run-portable-service":
                         assert "Configuration created in" in text, text
-                    if mode == "confirm-y":
+                    if mode.startswith("confirm-y"):
                         assert marker.exists() and (managed / "SKILL.md").exists(), text
                         assert (installed_data / "account.conf").exists(), text
                         assert (managed / "uninstall-dropbear-service.cmd").exists(), text

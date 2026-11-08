@@ -460,7 +460,18 @@ static int launch_portable_cleanup(const wchar_t *installed_exe,
 	startup.cb = sizeof(startup);
 	if (!CreateProcessW(installed_exe, command, NULL, NULL, FALSE,
 			CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB,
-			NULL, working_directory, &startup, &process)) return 0;
+			NULL, working_directory, &startup, &process)) {
+		DWORD error = GetLastError();
+		/* Task Scheduler and other launchers can forbid job breakaway. The
+		 * cleanup child can still wait for this installer inside that job. */
+		if (error != ERROR_ACCESS_DENIED ||
+				!CreateProcessW(installed_exe, command, NULL, NULL, FALSE,
+					CREATE_NO_WINDOW, NULL, working_directory, &startup, &process)) {
+			fprintf(stderr, "Could not start portable cleanup: Windows error %lu.\n",
+				(unsigned long)GetLastError());
+			return 0;
+		}
+	}
 	CloseHandle(process.hThread);
 	CloseHandle(process.hProcess);
 	printf("Portable cleanup will finish after this process exits: %ls\n", source_exe);
