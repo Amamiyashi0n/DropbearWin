@@ -124,9 +124,9 @@ MCP 初始化的 instructions 及 Skill 都声明这一发现流程；客户端�
 不会新建登录、解锁、切换其他人的 RDP 连接，也不把 SYSTEM 身份带到用户桌面。
 桌面启动、截图、显示查询和分辨率设置也接受 `username` 选择已登录用户。
 
-Premiere/After Effects 先使用 `dropbear_desktop_launch` 启动，选择同一 `username` 或
-`session_id` 并核对 PID/窗口。项目目录需要该用户可写，Node 路径需要该用户可执行。
-随后可直接调用（路径应替换为项目实际位置）：
+常驻桌面程序使用 `dropbear_desktop_launch` 启动，选择所需 `username` 或
+`session_id` 并核对 PID/窗口。工作目录需要该用户可访问，程序路径需要该用户可执行。
+执行命令并收集结果时可直接调用：
 
 ```json
 {
@@ -134,39 +134,38 @@ Premiere/After Effects 先使用 `dropbear_desktop_launch` 启动，选择同一
   "arguments": {
     "session_id": 3,
     "username": "agent",
-    "program": "C:\\tools\\node\\node.exe",
-    "args": ["C:\\Users\\Public\\adobe-work\\scripts\\ppro-smoke.mjs"],
-    "cwd": "C:\\Users\\Public\\adobe-work",
-    "timeout": 120,
-    "encoding": "utf-8"
+    "program": "C:\\Windows\\System32\\cmd.exe",
+    "args": ["/d", "/c", "whoami"],
+    "cwd": "C:\\Users\\Public",
+    "timeout": 30,
+    "encoding": "cp936"
   }
 }
 ```
 
-`npm.cmd` 等批处理需显式通过 `cmd.exe /d /s /c` 执行。
+批处理需显式通过 `cmd.exe /d /s /c` 执行。
 结果中的 `security_context` 给出真实 SID、Session、USERPROFILE、APPDATA 和 cwd；
 `execution` 给出退出码、Base64/文本输出及 `timed_out`、`output_limit_exceeded`。
 普通非零退出码正常返回。命令在恢复执行前加入 Job，结束或超时后回收该命令的子进程；
-需要常驻的 Adobe/Node 程序使用 `dropbear_desktop_launch`。
+需要常驻的程序使用 `dropbear_desktop_launch`。
 
 重复操作可使用常驻 worker，MCP 本体留在任何会话/其他机器：
 
 1. `dropbear_session_worker_start(username="agent", idle_timeout=600)`，保存返回的 `worker_id`。
 2. `dropbear_session_worker_call(worker_id=..., method="context")` 核对实际用户/Session。
-3. `method="exec"` 的 `params` 接受 program/args/cwd/env/stdin_base64，可执行 Node/BridgeTalk CLI。
+3. `method="exec"` 的 `params` 接受 program/args/cwd/env/stdin_base64，可执行命令行程序与脚本。
 4. `method="powershell"` 的 `params={"code":"..."}` 在独立 runspace 执行，可用 `$global:` 保存状态。
 5. `method="ui"` 的 params 接受下述 UI 字段；完成后调用 `dropbear_session_worker_stop`。
 
-worker 使用 Windows PowerShell，Node 子进程仅在执行 Node 命令时需要。每次 Node exec
-是独立进程；项目自身如需保持 Node 内部状态，可用 desktop_launch 启动现有项目的
-常驻 Node worker，再用会话命令调用其客户端。此功能提供会话执行/交互通道，未实现
-Adobe 专有 BridgeTalk 协议，也不代表某项目的 `ppro:smoke` 已通过。
+worker 使用 Windows PowerShell；运行其他语言的脚本时，由调用方提供对应解释器。
+每次 exec 是独立进程。需要保持进程内部状态时，可用 desktop_launch 启动常驻程序，
+再通过该程序自身的接口交互。应用任务是否成功，需要核验应用自身结果和界面状态。
 
 队列位于 ProgramData/DropbearWin 的随机 `session-<worker_id>` 目录，ACL 仅允许
 目标用户、SYSTEM 和 Administrators，传输走已有的 SSH/SFTP，不另开 localhost 服务。
 请求含唯一 ID、过期时间、SID 和 Session 核验，串行处理；不要并发提交有前后依赖的请求。
 worker 空闲 10～3600 秒自动退出，可用 worker_stop 清理已空闲退出的队列。
-主动 stop 不会关闭 Adobe 或其他独立桌面程序。会话注销会使 worker 不可用，需重新发现。
+主动 stop 后，独立启动的桌面程序继续运行。会话注销会使 worker 不可用，需重新发现。
 超时不自动重试，可能已经产生部分副作用；`worker_cleanup` 记录未完成清理的 worker ID。
 卸载前请先停止仍在使用的 worker。已在 Windows 10/PowerShell 5.1 验证，核心 SSH
 保留原有系统兼容目标，旧系统的桌面交互还需满足 PowerShell 和桌面启动能力要求。

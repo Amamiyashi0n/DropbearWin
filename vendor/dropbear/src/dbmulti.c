@@ -203,7 +203,7 @@ static int print_agent_guide(void) {
 		"Use `--desktop-launch --session ID --expect-user USER C:\\absolute\\program.exe [args]` for an existing active/connected console or RDP login. "
 		"The process uses the selected user's primary token and environment; SYSTEM is not retained. "
 		"Session 0 and mismatched users are rejected. This does not create a new Windows login, unlock a desktop, or guarantee GUI automation on a locked/disconnected desktop.\n\n"
-		"MCP dropbear_session_list returns structured Windows sessions and owner SIDs. Use dropbear_session_exec for Node/BridgeTalk commands in that user's session; "
+		"MCP dropbear_session_list returns structured Windows sessions and owner SIDs. Use dropbear_session_exec for commands in that user's session; "
 		"dropbear_session_ui lists windows and sends explicitly targeted focus/click/text/key actions on an unlocked desktop. "
 		"dropbear_session_worker_start/call/stop provides a persistent, user-token queue over SSH/SFTP. Select session_id or username; ambiguous usernames require an explicit Session ID. "
 		"The worker uses the selected user's profile/environment, not the SSH SYSTEM token. Ordinary dropbear_exec commands still use the SSH token.\n\n"

@@ -106,9 +106,9 @@ Use `dropbear_desktop_launch(username="agent", ...)` for persistent GUI programs
 For repeated operations use `dropbear_session_worker_start(username="agent")`,
 save `worker_id`, then `dropbear_session_worker_call` with `context`, `exec`,
 `powershell` or `ui`. A dedicated PowerShell runspace retains explicit `$global:`
-state. Node/BridgeTalk commands launched by `exec` inherit the worker's user and
-session; Node is still supplied by the project. Each Node exec is a new process;
-an existing project's persistent Node worker can be launched with desktop_launch.
+state. Commands launched by `exec` inherit the worker's user and session.
+Each exec starts a separate process; use desktop_launch for independently
+persistent programs.
 Stop the worker explicitly with `dropbear_session_worker_stop` when done.
 Queues use authenticated SSH/SFTP and a per-worker user/SYSTEM/Administrators ACL;
 there is no extra network listener. Workers expire after an idle timeout.
@@ -120,10 +120,8 @@ The worker verifies foreground focus before input and reports denied focus/UIPI
 or locked desktops as errors. Partial input is possible if focus changes; inspect
 before retrying. Do not operate another session's windows to work around a failure.
 
-For Adobe workflows, launch Premiere and After Effects with desktop_launch in the
-same selected login, then run the project's BridgeTalk/ppro:smoke commands through
-session_exec or worker_call(exec). Verify the actual Adobe result and UI readiness;
-successful transport/identity checks alone do not prove the Adobe smoke suite passed.
+Verify the target application's actual result and UI readiness after execution;
+successful transport or identity checks alone do not prove an application task succeeded.
 
 For MCP installation, environment variables and tool schemas, read
 [the integration reference](references/mcp.md).

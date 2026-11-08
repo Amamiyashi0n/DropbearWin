@@ -439,7 +439,7 @@ def create_server(remote: Remote) -> FastMCP:
 
         Requires session_id or username; supplying both verifies the owner. Uses
         the real user's token, profile and environment, not the SSH SYSTEM token.
-        Suitable for Node/BridgeTalk CLI or ppro:smoke in that same desktop session.
+        Suitable for command-line programs and scripts in that desktop session.
         Foreground commands are job-contained; use desktop_launch for persistent apps.
         Returns exit code, lossless streams and actual identity; no mutation retries.
         """
@@ -498,7 +498,7 @@ def create_server(remote: Remote) -> FastMCP:
     def dropbear_session_worker_stop(worker_id: str) -> dict:
         """Stop this worker gracefully and remove its own queue files.
 
-        Does not terminate Premiere/After Effects or unrelated desktop processes.
+        Independently launched desktop programs continue running.
         Busy workers must finish their bounded request before acknowledging stop.
         """
         return remote.session_worker_stop(worker_id)
