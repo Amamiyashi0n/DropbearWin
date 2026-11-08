@@ -8,6 +8,7 @@
 ├── src/windows/       Windows 服务、端口接管、日志与资源信息集成
 ├── tests/             Dropbear-win 的 Windows SSH 回归测试
 ├── tools/             Agent 调用端工具
+├── skills/            可安装的 DropbearWin Agent Skill
 ├── scripts/           Linux 交叉编译与 Windows 本机构建入口
 ├── docs/              Dropbear-win 的维护与依赖说明
 ├── build/             本地构建缓存，Git 忽略
@@ -210,6 +211,11 @@ Windows 工作前主动执行它。
 桌面启动能力。探测不输出 MOTD。
 `pty=false` 表示没有真正的控制台终端，当前管道模式不实现完整的窗口缩放和终端
 控制序列。自动化任务优先使用无 PTY exec。
+
+需要由 Agent 工具自动发现和调用时，使用客户端 stdio MCP 服务
+`tools/dropbear_mcp.py` 与 `skills/dropbear-win/SKILL.md`。它提供上下文、指南、Session
+查询、Shell 命令和结构化执行工具，以及指南资源和引导提示词。
+安装、认证环境和客户端配置见 [Skill 与 MCP 集成](docs/agent-mcp.md)。
 
 每个命令拥有独立环境块，包含 `USER`、`LOGNAME`、`HOME`、`SHELL`、`TERM`、
 `SSH_CLIENT`、`SSH_CONNECTION`。HOME 与默认工作目录为服务启动目录。每个 exec 是

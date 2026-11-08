@@ -1,0 +1,6 @@
+interface:
+  display_name: "DropbearWin"
+  short_description: "Discover Windows SSH identity and operate DropbearWin hosts"
+  default_prompt: "Use $dropbear-win to inspect the configured Windows SSH host and carry out the requested task."
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,3 @@
+# Official MCP SDK v1 API (FastMCP); keep the major-version boundary explicit.
+mcp>=1.20,<2
+paramiko>=3.4,<5
