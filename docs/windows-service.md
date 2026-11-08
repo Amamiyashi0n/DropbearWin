@@ -26,7 +26,7 @@ XP / Server 2003 上只禁用该命令，普通 SSH 服务和命令仍保持原�
 
 ```powershell
 .\dropbear-win-x64.exe --install-autostart
-# 可附加服务参数：.\dropbear-win-x64.exe --install-autostart -p 52222 -K 30
+# 默认端口是 22；可附加其他服务参数，例如：-p 22222 -K 30
 ```
 
 32 位系统使用 `dropbear-win-x86.exe`。EXE 内嵌管理员权限请求清单；在支持 UAC
@@ -90,7 +90,7 @@ Windows 错误并退出
 服务入口是：
 
 ```text
-dropbear-win-x64.exe --service DropbearWin -p 52222 -K 30
+dropbear-win-x64.exe --service DropbearWin -p 22 -K 30
 ```
 
 这条命令应由 SCM 启动；直接在终端运行 `--service` 会返回 dispatcher 错误。
@@ -104,7 +104,7 @@ dropbear-win-x64.exe --service DropbearWin -p 52222 -K 30
 
 ```powershell
 New-Service -Name 'DropbearWin' -DisplayName 'Dropbear for Windows' `
-  -BinaryPathName '"C:\Tools\DropbearWin\dropbear-win-x64.exe" --service DropbearWin -p 52222 -K 30' `
+  -BinaryPathName '"C:\Tools\DropbearWin\dropbear-win-x64.exe" --service DropbearWin -p 22 -K 30' `
   -StartupType Manual
 Start-Service DropbearWin
 Get-Service DropbearWin
@@ -113,7 +113,7 @@ Get-Service DropbearWin
 无需 PowerShell 的系统可在管理员 CMD 使用系统自带的 `sc.exe`：
 
 ```bat
-sc.exe create DropbearWin binPath= "\"C:\Tools\DropbearWin\dropbear-win-x64.exe\" --service DropbearWin -p 52222 -K 30" start= demand
+sc.exe create DropbearWin binPath= "\"C:\Tools\DropbearWin\dropbear-win-x64.exe\" --service DropbearWin -p 22 -K 30" start= demand
 sc.exe start DropbearWin
 sc.exe query DropbearWin
 ```
@@ -134,7 +134,7 @@ SCM 服务环境独立于当前终端；在终端设置的 `DROPBEAR_WIN_*` 环�
 服务模式将启动及连接诊断追加到数据目录的 `service.log`。当前不包含日志轮转。
 排查服务启动失败时查看该文件及 `sc.exe query DropbearWin` 的退出码；日志文件
 本身打开失败时，通过 SCM 的非零服务退出码反映。缺少账号配置时服务不等待键盘
-输入，格式损坏的账号文件会报错退出。默认 52222 被占用时会先接管旧监听进程；
+输入，格式损坏的账号文件会报错退出。默认 22 被占用时会先接管旧监听进程；
 权限不足、接管失败或其他端口冲突时不报告 RUNNING。启动阶段为 START_PENDING，监听成功后为
 RUNNING，收到停止请求后经 STOP_PENDING 到 STOPPED。
 
@@ -176,7 +176,7 @@ sc.exe delete DropbearWin
 客户端一直等不到 EOF。长驻业务进程应使用独立服务，不依赖 SSH 断线后继续运行。
 `--desktop-launch` 是明确请求的例外：桌面程序在登录用户的独立会话中运行。
 
-52222 的接管同样适用于服务实例：启动控制台实例可以结束旧服务进程，随后 SCM
+22 的接管同样适用于服务实例：启动控制台实例可以结束旧服务进程，随后 SCM
 显示该服务停止；再次启动服务也可以接管控制台实例。双方始终独占绑定，不共享
 监听端口。接管会终止旧会话及任务，服务配置、账号和主机密钥保留。如果自行配置了
 SCM 自动故障重启，切换到控制台实例前应先用 `sc.exe stop` 停止旧服务，避免恢复策略

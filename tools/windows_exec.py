@@ -1,6 +1,6 @@
 """Send a JSON execution request through the native Windows SSH subsystem.
 
-python windows_exec.py --request task.json --port 52222 user@host
+python windows_exec.py --request task.json --port 22 user@host
 The optional --input file is passed verbatim as the remote application's stdin.
 Authentication and host key handling are performed by the local OpenSSH client.
 """
@@ -58,7 +58,7 @@ def encode_request(request, protocol=2):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("host")
-    parser.add_argument("--port", type=int, default=52222)
+    parser.add_argument("--port", type=int, default=22)
     parser.add_argument("--request", required=True)
     parser.add_argument("--input")
     parser.add_argument("--identity")

@@ -68,7 +68,7 @@ SHA-256。部署时使用清单中的 EXE；`dist/` 不保留旧版 EXE。
 # 32 位系统使用：.\dropbear-win-x86.exe
 ```
 
-首次运行会询问自定义 SSH 用户名和密码，随后默认监听 `0.0.0.0:52222`。
+首次运行会询问自定义 SSH 用户名和密码，随后默认监听 `0.0.0.0:22`。
 **权限提醒：此 SSH 账号有意独立于 Windows 用户数据库；认证成功不会切换 Windows
 访问令牌。远程命令和文件传输继承启动 EXE 的 Windows 身份；注册为默认服务时，
 该身份是 LocalSystem。** 绿色版直接运行时，数据位于 EXE 旁的
@@ -78,9 +78,9 @@ SHA-256。部署时使用清单中的 EXE；`dist/` 不保留旧版 EXE。
 地址、SSH 连接命令、认证用户名、Shell、PID 和数据目录。端口占用等监听错误不会
 显示成功状态，进程会返回非零退出码。
 
-所有 Windows TCP 监听使用独占绑定。默认 **52222** 发生冲突时，新实例会查询
+所有 Windows TCP 监听使用独占绑定。默认 **22** 发生冲突时，新实例会查询
 实际监听 PID，终止旧监听进程及其可回收的子进程，等待结束并重新独占绑定；这也
-适用于占用 52222 的其他程序。旧 SSH 会话和任务会结束，账号与主机密钥保留。
+适用于占用 22 的其他程序。旧 SSH 会话和任务会结束，账号与主机密钥保留。
 多个实例同时启动时会串行执行接管。权限不足或端口仍未释放时，新实例明确报错
 退出，不报告 RUNNING，不退回共享绑定。其他端口发生冲突时只报错，不终止占用者。
 远程端口转发请求不会触发进程接管。
@@ -194,7 +194,7 @@ $env:DROPBEAR_WIN_SHELL = 'powershell'
 Agent 首次连接应执行以下探测，再根据 `shell` 决定语法：
 
 ```text
-ssh -p 52222 user@host __dropbear_win_probe__
+ssh -p 22 user@host __dropbear_win_probe__
 ```
 
 返回版本化 JSON，包含 `os=windows`、`shell`、`pty=false`、`transport=pipes`、
@@ -229,7 +229,7 @@ OpenSSH 仅需安装在调用端，登录密码由 OpenSSH 交互读取。
 ```
 
 ```text
-python tools/windows_exec.py --request task.json --port 52222 user@host
+python tools/windows_exec.py --request task.json --port 22 user@host
 python tools/windows_exec.py --request task.json --input input.bin user@host
 ```
 
@@ -303,9 +303,9 @@ python tests/windows_stress.py dist/dropbear-win-x64.exe build/stress-x64.json
 python tests/windows_stress.py dist/dropbear-win-x86.exe build/stress-x86.json
 ```
 
-`tests/windows_usability.py EXE --service` 覆盖首次配置、重复/并发启动、52222
+`tests/windows_usability.py EXE --service` 覆盖首次配置、重复/并发启动、22
 接管、权限失败、IPv6、真实控制台退出和日志、坏配置、带空格/中文路径及服务和
-控制台互相接管。需要管理员权限运行完整服务测试；开始前要求本机 52222 没有
+控制台互相接管。需要管理员权限运行完整服务测试；开始前要求本机 22 没有
 现有监听，仅接管测试自己创建的进程。测试结果矩阵见
 [使用性排查记录](docs/usability-audit.md)。
 
@@ -333,7 +333,7 @@ python tests/windows_stress.py dist/dropbear-win-x86.exe build/stress-x86.json
 
 ```powershell
 .\dropbear-win-x64.exe --install-autostart
-# 需要指定监听端口时：.\dropbear-win-x64.exe --install-autostart -p 52222
+# 默认端口是 22；仅改用其他端口时追加：-p 22222
 ```
 
 32 位 Windows 改用 `dropbear-win-x86.exe`。首次运行会申请管理员权限并设置本项目的
@@ -391,16 +391,16 @@ SSH 账号与主机密钥。若同名服务指向其他程序，确认后会停�
 
 ```powershell
 # 上传（新版 OpenSSH 默认模式）
-scp -P 52222 .\local.bin user@192.168.1.10:C:/Temp/remote.bin
+scp -P 22 .\local.bin user@192.168.1.10:C:/Temp/remote.bin
 
 # 下载
-scp -P 52222 user@192.168.1.10:C:/Temp/remote.bin .\local.bin
+scp -P 22 user@192.168.1.10:C:/Temp/remote.bin .\local.bin
 
 # 递归传输目录
-scp -r -P 52222 .\folder user@192.168.1.10:C:/Temp/
+scp -r -P 22 .\folder user@192.168.1.10:C:/Temp/
 
 # 强制使用传统 SCP 协议
-scp -O -P 52222 .\local.bin user@192.168.1.10:C:/Temp/remote.bin
+scp -O -P 22 .\local.bin user@192.168.1.10:C:/Temp/remote.bin
 ```
 
 远端 Windows 路径建议使用正斜杠，例如 `C:/Temp/file.bin`。包含空格或中文的路径

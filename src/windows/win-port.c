@@ -10,7 +10,8 @@ static HANDLE startup_mutex;
 int dropbear_win_startup_lock(void) {
 	DWORD result;
 	if (startup_mutex) return 1;
-	startup_mutex = CreateMutexW(NULL, FALSE, L"Global\\DropbearWin-start-52222");
+	startup_mutex = CreateMutexW(NULL, FALSE,
+		L"Global\\DropbearWin-start-" DROPBEAR_WIN_DEFAULT_PORT_W);
 	if (!startup_mutex) return 0;
 	result = WaitForSingleObject(startup_mutex, 15000);
 	if (result == WAIT_OBJECT_0 || result == WAIT_ABANDONED) return 1;
@@ -100,18 +101,22 @@ static int stop_port_owners(tcp_table_fn query, ULONG family) {
 			MIB_TCP6ROW_OWNER_PID *row = &((MIB_TCP6TABLE_OWNER_PID *)table)->table[index];
 			pid = row->dwOwningPid; port = row->dwLocalPort;
 		}
-		if (ntohs((u_short)port) != 52222 || !pid || pid == GetCurrentProcessId()) continue;
+		if (ntohs((u_short)port) != DROPBEAR_WIN_DEFAULT_PORT ||
+				!pid || pid == GetCurrentProcessId()) continue;
 		process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE, pid);
 		if (!process) {
-			fprintf(stderr, "Port 52222 takeover: opening PID %lu failed (Windows %lu)\n",
+			fprintf(stderr, "Port %u takeover: opening PID %lu failed (Windows %lu)\n",
+				DROPBEAR_WIN_DEFAULT_PORT,
 				(unsigned long)pid, (unsigned long)GetLastError());
 			continue;
 		}
 		if (WaitForSingleObject(process, 0) == WAIT_OBJECT_0) { CloseHandle(process); continue; }
-		fprintf(stderr, "Port 52222 takeover: terminating listening PID %lu\n", (unsigned long)pid);
+		fprintf(stderr, "Port %u takeover: terminating listening PID %lu\n",
+			DROPBEAR_WIN_DEFAULT_PORT, (unsigned long)pid);
 		if (stop_owner_tree(process, pid))
 			stopped++;
-		else fprintf(stderr, "Port 52222 takeover: PID %lu did not stop (Windows %lu)\n",
+		else fprintf(stderr, "Port %u takeover: PID %lu did not stop (Windows %lu)\n",
+			DROPBEAR_WIN_DEFAULT_PORT,
 			(unsigned long)pid, (unsigned long)GetLastError());
 		CloseHandle(process);
 	}
@@ -130,7 +135,7 @@ int dropbear_win_bind_listener(int fd, const struct sockaddr *address, int lengt
 	UINT used;
 	if (dropbear_win_bind(fd, address, length) == 0) return 0;
 	original_error = errno;
-	if (!dropbear_win_takeover_enabled || port != 52222 ||
+	if (!dropbear_win_takeover_enabled || port != DROPBEAR_WIN_DEFAULT_PORT ||
 		(original_error != EADDRINUSE && original_error != EACCES)) return -1;
 	/* Load the system library explicitly, without a new static DLL dependency. */
 	used = GetSystemDirectoryW(path, MAX_PATH);
@@ -153,7 +158,8 @@ int dropbear_win_bind_listener(int fd, const struct sockaddr *address, int lengt
 		if (errno != EADDRINUSE && errno != EACCES) break;
 		Sleep(50);
 	}
-	fprintf(stderr, "Port 52222 takeover: exclusive bind failed after cleanup\n");
+	fprintf(stderr, "Port %u takeover: exclusive bind failed after cleanup\n",
+		DROPBEAR_WIN_DEFAULT_PORT);
 	return -1;
 }
 #endif

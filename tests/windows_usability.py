@@ -1,6 +1,6 @@
 """Real Windows startup, restart, log and console usability tests.
 
-Uses disposable accounts/processes. The default-port test first requires 52222
+Uses disposable accounts/processes. The default-port test first requires 22
 to be unused, then takes over only fixtures it creates. Requires Paramiko/psutil.
 """
 import concurrent.futures
@@ -237,27 +237,27 @@ def run(executable):
             assert execute(client, "echo original")[0].strip() == b"original"
     print("PASS: nondefault port collision rejected; original remains healthy", flush=True)
 
-    assert not listeners(52222), "52222 already has a real listener; default-port fixture not started"
+    assert not listeners(22), "22 already has a real listener; default-port fixture not started"
     with deployment(executable) as fixture:
-        current = fixture.start(52222)
-        fixture.ready(current, 52222)
+        current = fixture.start(22)
+        fixture.ready(current, 22)
         identity = {name: (fixture.directory / name).read_bytes()
                     for name in ("account.conf", "hostkey_ed25519")}
         for cycle in range(3):
-            with connect(52222, fixture.password) as client:
+            with connect(22, fixture.password) as client:
                 channel, pids = task(client)
-                replacement = fixture.start(52222)
-                fixture.ready(replacement, 52222)
+                replacement = fixture.start(22)
+                fixture.ready(replacement, 22)
                 current.wait(timeout=10)
                 eventually(lambda: all(gone(pid) for pid in pids))
                 eventually(lambda: not client.get_transport().is_active())
-            assert listeners(52222) == {replacement.pid}
+            assert listeners(22) == {replacement.pid}
             current = replacement
             assert all((fixture.directory / name).read_bytes() == data for name, data in identity.items())
-        with connect(52222, fixture.password) as client:
+        with connect(22, fixture.password) as client:
             assert execute(client, "echo replaced")[0].strip() == b"replaced"
             try:
-                client.get_transport().request_port_forward("127.0.0.1", 52222)
+                client.get_transport().request_port_forward("127.0.0.1", 22)
             except Exception:
                 pass
             else:
@@ -266,46 +266,46 @@ def run(executable):
         assert "terminating listening PID" in fixture.logtext()
         # Serializing concurrent starts prevents shared binding, even if the
         # later starter intentionally replaces the earlier starter.
-        contenders = [fixture.start(52222) for _ in range(3)]
+        contenders = [fixture.start(22) for _ in range(3)]
         eventually(lambda: sum(p.poll() is None for p in [current, *contenders]) == 1, timeout=20)
         survivor = next(p for p in contenders if p.poll() is None)
-        fixture.ready(survivor, 52222)
-        assert listeners(52222) == {survivor.pid}
-        with connect(52222, fixture.password) as client:
+        fixture.ready(survivor, 22)
+        assert listeners(22) == {survivor.pid}
+        with connect(22, fixture.password) as client:
             assert execute(client, "echo last-start")[2] == 0
-    print("PASS: 52222 takeover/repeated and concurrent starts; old task trees reclaimed", flush=True)
+    print("PASS: 22 takeover/repeated and concurrent starts; old task trees reclaimed", flush=True)
 
-    # A different server implementation on 52222 is also an explicitly scoped
+    # A different server implementation on 22 is also an explicitly scoped
     # port owner. Spawn it separately so the test controller is never a target.
     with deployment(executable) as fixture:
         child_pidfile = fixture.directory / "legacy-child.pid"
         other = subprocess.Popen([sys.executable, "-c",
             "import socket,time,subprocess,sys,pathlib; s=socket.socket(); "
-            "s.bind(('127.0.0.1',52222)); s.listen(); "
+            "s.bind(('127.0.0.1',22)); s.listen(); "
             "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
             "pathlib.Path(sys.argv[1]).write_text(str(p.pid)); time.sleep(60)", str(child_pidfile)],
             creationflags=subprocess.CREATE_NO_WINDOW)
         try:
-            eventually(lambda: other.pid in listeners(52222))
+            eventually(lambda: other.pid in listeners(22))
             eventually(lambda: child_pidfile.exists())
             legacy_child = int(child_pidfile.read_text())
-            replacement = fixture.start(52222)
-            fixture.ready(replacement, 52222)
+            replacement = fixture.start(22)
+            fixture.ready(replacement, 22)
             other.wait(timeout=10)
             eventually(lambda: gone(legacy_child))
-            assert listeners(52222) == {replacement.pid}
+            assert listeners(22) == {replacement.pid}
         finally:
             if other.poll() is None:
                 other.terminate()
             other.wait(timeout=5)
-    print("PASS: 52222 takeover reclaims listener and legacy child without a watcher", flush=True)
+    print("PASS: 22 takeover reclaims listener and legacy child without a watcher", flush=True)
 
     with deployment(executable) as fixture:
         other = subprocess.Popen([sys.executable, "-c",
-            "import socket,time; s=socket.socket(); s.bind(('127.0.0.1',52222)); s.listen(); time.sleep(60)"],
+            "import socket,time; s=socket.socket(); s.bind(('127.0.0.1',22)); s.listen(); time.sleep(60)"],
             creationflags=subprocess.CREATE_NO_WINDOW)
         try:
-            eventually(lambda: other.pid in listeners(52222))
+            eventually(lambda: other.pid in listeners(22))
             security = ctypes.WinDLL("advapi32", use_last_error=True)
             kernel = ctypes.WinDLL("kernel32", use_last_error=True)
             descriptor = ctypes.c_void_p()
@@ -319,9 +319,9 @@ def run(executable):
                 assert security.SetKernelObjectSecurity(int(other._handle), 4, descriptor)
             finally:
                 kernel.LocalFree(descriptor)
-            rejected = fixture.start(52222, restricted=True)
+            rejected = fixture.start(22, restricted=True)
             assert rejected.wait(timeout=10) != 0
-            assert other.poll() is None and listeners(52222) == {other.pid}
+            assert other.poll() is None and listeners(22) == {other.pid}
             assert "opening PID" in fixture.logtext() and "RUNNING" not in fixture.logtext()
         finally:
             # This handle predates the test DACL and retains termination rights.
@@ -331,12 +331,12 @@ def run(executable):
     print("PASS: denied takeover reports PID/error, does not falsely announce RUNNING", flush=True)
 
     with deployment(executable) as fixture:
-        old = fixture.start(52222, address="[::1]")
-        fixture.ready(old, 52222)
-        new = fixture.start(52222, address="[::1]")
-        fixture.ready(new, 52222)
+        old = fixture.start(22, address="[::1]")
+        fixture.ready(old, 22)
+        new = fixture.start(22, address="[::1]")
+        fixture.ready(new, 22)
         old.wait(timeout=10)
-        assert listeners(52222) == {new.pid}
+        assert listeners(22) == {new.pid}
     print("PASS: IPv6 default-port owner takeover", flush=True)
 
     for close_window in (False, True):
@@ -449,7 +449,7 @@ def run(executable):
 
 
 def service_takeover(executable):
-    assert not listeners(52222), "52222 already has a real listener"
+    assert not listeners(22), "22 already has a real listener"
     name = "DropbearUsability_" + secrets.token_hex(6)
     sc = str(Path(os.environ["SystemRoot"]) / "System32" / "sc.exe")
     def command(*args, check=True):
@@ -459,34 +459,34 @@ def service_takeover(executable):
         deployed = folder / "dropbear-win.exe"
         shutil.copy2(executable, deployed)
         password = account(folder / "dropbear-win-data")
-        binary = subprocess.list2cmdline([str(deployed), "--service", name, "-p", "127.0.0.1:52222"])
+        binary = subprocess.list2cmdline([str(deployed), "--service", name, "-p", "127.0.0.1:22"])
         command("create", name, "binPath=", binary, "start=", "demand")
         try:
             command("start", name)
             eventually(lambda: b"RUNNING" in command("query", name).stdout)
             with deployment(executable) as fixture:
-                with connect(52222, password) as client:
+                with connect(22, password) as client:
                     channel, pids = task(client)
-                    replacement = fixture.start(52222)
-                    fixture.ready(replacement, 52222)
+                    replacement = fixture.start(22)
+                    fixture.ready(replacement, 22)
                     eventually(lambda: b"STOPPED" in command("query", name).stdout)
                     eventually(lambda: all(gone(pid) for pid in pids))
-                with connect(52222, fixture.password) as client:
+                with connect(22, fixture.password) as client:
                     assert execute(client, "echo console-replaced-service")[2] == 0
                 command("start", name)
                 eventually(lambda: b"RUNNING" in command("query", name).stdout)
                 replacement.wait(timeout=10)
-                with connect(52222, password) as client:
+                with connect(22, password) as client:
                     assert execute(client, "echo service-replaced-console")[2] == 0
             command("stop", name)
             eventually(lambda: b"STOPPED" in command("query", name).stdout)
-            eventually(lambda: not listeners(52222))
+            eventually(lambda: not listeners(22))
         finally:
             command("stop", name, check=False)
             eventually(lambda: b"STOPPED" in command("query", name).stdout)
             command("delete", name)
             time.sleep(.5)
-    print("PASS: real SCM service and console replace each other on 52222", flush=True)
+    print("PASS: real SCM service and console replace each other on 22", flush=True)
 
 
 def console_ctrl_c_test(executable):

@@ -188,8 +188,8 @@ static void main_noinetd(int argc, char ** argv, const char* multipath) {
 	/* Set up the listening sockets */
 #ifdef DROPBEAR_WIN32_NATIVE
 	for (i = 0; i < svr_opts.portcount; i++) {
-		if (strcmp(svr_opts.ports[i], "52222") == 0 && !dropbear_win_startup_lock())
-			dropbear_exit("Port 52222 startup lock failed");
+		if (strcmp(svr_opts.ports[i], DROPBEAR_DEFPORT) == 0 && !dropbear_win_startup_lock())
+			dropbear_exit("Port %s startup lock failed", DROPBEAR_DEFPORT);
 	}
 #endif
 	listensockcount = listensockets(listensocks, MAX_LISTEN_ADDR, &maxsock);
