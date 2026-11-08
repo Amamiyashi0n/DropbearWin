@@ -947,8 +947,8 @@ void dropbear_win_maybe_register_service(int argc, char **argv) {
 	SC_HANDLE service;
 	wchar_t executable[32768], install_dir[32768], installed_exe[32768], marker[32768];
 	DWORD attributes;
-	int current_match, installed_match, marker_length;
-	int upgrading = 0, replacing_service = 0;
+	int current_match, installed_match, marker_length, valid_install;
+	int upgrading = 0, replacing_service = 0, migrating_service = 0;
 	if (service_mode || !_isatty(_fileno(stdin))) return;
 	if (!GetModuleFileNameW(NULL, executable, 32768)) return;
 
@@ -960,20 +960,30 @@ void dropbear_win_maybe_register_service(int argc, char **argv) {
 			? _snwprintf(marker, 32768, L"%ls\\dropbear-win.installed", install_dir) : 0;
 		attributes = marker_length > 0 && marker_length < 32768
 			? GetFileAttributesW(marker) : INVALID_FILE_ATTRIBUTES;
+		valid_install = installed_match == 1 && attributes != INVALID_FILE_ATTRIBUTES &&
+			!(attributes & FILE_ATTRIBUTE_DIRECTORY);
 		CloseServiceHandle(service);
-		if (current_match == 1) {
+		/* A service registration may still point at a desktop/portable EXE.
+		 * Only the managed path plus its marker proves installation completed. */
+		if (current_match == 1 && valid_install && !_wcsicmp(executable, installed_exe)) {
 			write_uninstall_script(executable);
 			return;
 		}
-		if (installed_match != 1 || attributes == INVALID_FILE_ATTRIBUTES ||
-				(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+		if (current_match == 1) {
+			migrating_service = 1;
+		} else if (!valid_install) {
 			replacing_service = 1;
 		} else {
 			upgrading = 1;
 		}
 	}
 
-	if (upgrading) {
+	if (migrating_service) {
+		fputs("\nA service named \"DropbearWin\" points to this EXE, but this copy is not a managed installation.\n"
+			"Installing will migrate the EXE to the system drive's Program Files\\DropbearWin directory,\n"
+			"move its data to the installed ProgramData directory, and update the service for automatic startup.\n"
+			"Continue with the installation? [y/N] ", stdout);
+	} else if (upgrading) {
 		fputs("\nAn existing DropbearWin installation was found.\n"
 			"Installing this version will remove the old installed program and replace its service configuration.\n"
 			"The installed SSH account and host key will be preserved.\n"
