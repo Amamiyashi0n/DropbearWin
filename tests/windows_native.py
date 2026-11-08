@@ -82,6 +82,7 @@ def run(executable, backend):
                     assert b"Welcome to Dropbear for Windows" in banner, banner
                     for field in (b"Host:", b"System:", b"SSH user:", b"Windows user:",
                                   b"Access token:", b"Session ID:", b"Command rule:",
+                                  b"Agent guide:",
                                   b"Desktop GUI:", b"Permission switch:", b"Session target:",
                                   b"Shell:", b"Working dir:", b"Snapshot:", b"Disk (cwd):"):
                         assert field in banner, (field, banner)
@@ -100,9 +101,20 @@ def run(executable, backend):
                 out, err, status = execute(client, "__dropbear_win_probe__")
                 probe = json.loads(out)
                 assert status == 0 and not err and probe["shell"] == backend, (out, err, status)
+                assert probe["version"] == 2 and probe["agent_context_version"] == 1
+                assert probe["default_port"] == 22
+                assert probe["ssh_auth_user"] == "agent" and probe["windows_user"]
+                assert probe["agent_guide_command"] == "__dropbear_win_guide__"
+                assert probe["desktop_launch"]["arbitrary_session"] is False
                 assert probe["exec_subsystem"] == "dropbear-exec-v1"
                 assert probe["control_encoding"] == "base64"
                 assert probe["exec_protocols"] == [1, 2] and probe["exec_protocol_default"] == 2
+                guide, err, status = execute(client, "__dropbear_win_guide__")
+                assert status == 0 and not err, (guide, err, status)
+                for text in (b"name: dropbear-win-agent-context", b"Authoritative connection",
+                             b"__dropbear_win_probe__", b"Effective Windows identity:",
+                             b"Never infer Windows privileges", b"Arbitrary or RDP Session ID"):
+                    assert text in guide, (text, guide)
                 if backend == "cmd":
                     quoted_program = directory / "quoted command.exe"
                     shutil.copyfile(Path(os.environ["SystemRoot"]) / "System32" / "cmd.exe", quoted_program)

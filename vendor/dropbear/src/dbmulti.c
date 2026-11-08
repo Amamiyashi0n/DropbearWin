@@ -26,6 +26,101 @@
 #include "dbutil.h"
 
 #ifdef DROPBEAR_WIN32_NATIVE
+static void print_json_string(const char *value) {
+	const unsigned char *p = (const unsigned char *)(value ? value : "");
+	fputc('"', stdout);
+	for (; *p; p++) {
+		switch (*p) {
+			case '"': fputs("\\\"", stdout); break;
+			case '\\': fputs("\\\\", stdout); break;
+			case '\b': fputs("\\b", stdout); break;
+			case '\f': fputs("\\f", stdout); break;
+			case '\n': fputs("\\n", stdout); break;
+			case '\r': fputs("\\r", stdout); break;
+			case '\t': fputs("\\t", stdout); break;
+			default:
+				if (*p < 0x20) fprintf(stdout, "\\u%04x", (unsigned int)*p);
+				else fputc(*p, stdout);
+		}
+	}
+	fputc('"', stdout);
+}
+
+static int print_agent_probe(void) {
+	const char *backend = getenv("DROPBEAR_WIN_SHELL");
+	const char *ssh_user = getenv("USER");
+	char identity[1050], token[192];
+	DWORD session_id = 0xffffffffUL;
+	if (!backend || !backend[0]) backend = "cmd";
+	if (strcmp(backend, "cmd") && strcmp(backend, "powershell")) return 2;
+	if (!ssh_user || !ssh_user[0]) ssh_user = "unknown";
+	dropbear_win_runtime_security(identity, sizeof(identity), token, sizeof(token), &session_id);
+	fputs("{\"version\":2,\"agent_context_version\":1,\"os\":\"windows\",\"shell\":", stdout);
+	print_json_string(backend);
+	fputs(",\"pty\":false,\"transport\":\"pipes\",\"sftp\":true,"
+		"\"exec_encoding\":\"raw\",\"control_encoding\":\"base64\","
+		"\"exec_protocols\":[1,2],\"exec_protocol_default\":2,"
+		"\"posix_shell\":false,\"exec_subsystem\":\"dropbear-exec-v1\",", stdout);
+	fprintf(stdout, "\"default_port\":%u,\"ssh_auth_user\":",
+		DROPBEAR_WIN_DEFAULT_PORT);
+	print_json_string(ssh_user);
+	fputs(",\"windows_user\":", stdout);
+	print_json_string(identity);
+	fputs(",\"access_token\":", stdout);
+	print_json_string(token);
+	fprintf(stdout, ",\"session_id\":%lu,", (unsigned long)session_id);
+	fputs("\"identity_rule\":\"SSH user is a Dropbear authentication label; ordinary commands inherit the server process Windows token\","
+		"\"agent_guide_command\":\"__dropbear_win_guide__\","
+		"\"desktop_launch\":{\"command\":\"--desktop-launch\","
+		"\"target\":\"active-physical-console\",\"token\":\"console-user\","
+		"\"arbitrary_session\":false}}\n", stdout);
+	return 0;
+}
+
+static int print_agent_guide(void) {
+	const char *backend = getenv("DROPBEAR_WIN_SHELL");
+	const char *ssh_user = getenv("USER");
+	char identity[1050], token[192];
+	DWORD session_id = 0xffffffffUL;
+	if (!backend || !backend[0]) backend = "cmd";
+	if (strcmp(backend, "cmd") && strcmp(backend, "powershell")) return 2;
+	if (!ssh_user || !ssh_user[0]) ssh_user = "unknown";
+	dropbear_win_runtime_security(identity, sizeof(identity), token, sizeof(token), &session_id);
+	fputs("---\n"
+		"name: dropbear-win-agent-context\n"
+		"description: Authoritative connection, identity, execution, and desktop-session rules for DropbearWin agents.\n"
+		"context_version: 1\n"
+		"---\n\n"
+		"# DropbearWin Agent Context\n\n"
+		"This embedded guide is authoritative for this server binary. Read `__dropbear_win_probe__` first when machine-readable context is needed.\n\n"
+		"## Current connection security context\n\n", stdout);
+	fprintf(stdout, "- SSH authentication name: `%s` (Dropbear label only; not a Windows account)\n", ssh_user);
+	fprintf(stdout, "- Effective Windows identity: `%s`\n", identity);
+	fprintf(stdout, "- Access token: `%s`\n", token);
+	fprintf(stdout, "- Windows Session ID: `%lu`\n", (unsigned long)session_id);
+	fprintf(stdout, "- Command shell: `%s` (not a POSIX shell)\n\n", backend);
+	fputs("Ordinary SSH commands and file operations inherit the Windows identity/token above. Never infer Windows privileges from the SSH authentication name.\n\n"
+		"## Required agent discovery\n\n"
+		"```text\n"
+		"ssh user@host __dropbear_win_probe__\n"
+		"ssh user@host __dropbear_win_guide__\n"
+		"```\n\n"
+		"The probe is versioned JSON. This guide is versioned Markdown intended to be loaded like a remote skill before planning Windows work.\n\n"
+		"## Execution rules\n\n", stdout);
+	fprintf(stdout, "- Default SSH port: `%u`.\n", DROPBEAR_WIN_DEFAULT_PORT);
+	fputs(
+		"- Prefer non-PTY exec for automation. Interactive CMD text is UTF-8/OEM converted; non-PTY stdout/stderr remain raw bytes.\n"
+		"- Each exec starts with an independent environment and working directory; `cd` and variable changes do not persist across commands.\n"
+		"- Use the `dropbear-exec-v1` subsystem for structured executable/argument/environment requests without shell quoting.\n"
+		"- SFTP and legacy SCP are supported. Use Windows paths and absolute executable paths where practical.\n"
+		"- Do not inspect Microsoft OpenSSH configuration to explain this server; DropbearWin has its own account, key, data, and service model.\n\n"
+		"## Desktop-session rule\n\n"
+		"Ordinary commands remain in the SSH service session. `--desktop-launch` is the explicit exception: it launches into the active physical-console session with that console user's primary token and environment, so SYSTEM is not retained. Arbitrary or RDP Session ID selection is not currently supported.\n\n"
+		"## Safety\n\n"
+		"Treat the effective Windows identity and token as the authority boundary. Confirm target paths and services before destructive changes, and do not expose account configuration or host private keys.\n", stdout);
+	return 0;
+}
+
 static int hex_value(char c) {
 	if (c >= '0' && c <= '9') return c - '0';
 	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -125,17 +220,10 @@ static int run_native_internal(int argc, char **argv) {
 	if (argc == 2 && !strcmp(argv[1], "--dropbear-win-exec")) return dropbear_win_exec_main();
 	if (argc >= 2 && !strcmp(argv[1], "--desktop-launch"))
 		return dropbear_win_desktop_launch_main();
-	if (argc == 2 && strcmp(argv[1], "--dropbear-win-probe") == 0) {
-		const char *backend = getenv("DROPBEAR_WIN_SHELL");
-		if (!backend || !backend[0]) backend = "cmd";
-		if (strcmp(backend, "cmd") && strcmp(backend, "powershell")) return 2;
-		printf("{\"version\":1,\"os\":\"windows\",\"shell\":\"%s\","
-			"\"pty\":false,\"transport\":\"pipes\",\"sftp\":true,"
-			"\"exec_encoding\":\"raw\",\"control_encoding\":\"base64\","
-			"\"exec_protocols\":[1,2],\"exec_protocol_default\":2,"
-			"\"posix_shell\":false,\"exec_subsystem\":\"dropbear-exec-v1\"}\n", backend);
-		return 0;
-	}
+	if (argc == 2 && strcmp(argv[1], "--dropbear-win-probe") == 0)
+		return print_agent_probe();
+	if (argc == 2 && strcmp(argv[1], "--dropbear-win-guide") == 0)
+		return print_agent_guide();
 	if (argc == 2 && strcmp(argv[1], "--dropbear-win-sftp") == 0) {
 		return dropbear_win_sftp_main();
 	}

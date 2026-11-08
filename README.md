@@ -191,14 +191,23 @@ $env:DROPBEAR_WIN_SHELL = 'powershell'
 .\dropbear-win-x64.exe
 ```
 
-Agent 首次连接应执行以下探测，再根据 `shell` 决定语法：
+Agent 首次连接应先读取内嵌指南，再执行结构化探测，并根据 `shell` 决定语法：
 
 ```text
+ssh -p 22 user@host __dropbear_win_guide__
 ssh -p 22 user@host __dropbear_win_probe__
 ```
 
-返回版本化 JSON，包含 `os=windows`、`shell`、`pty=false`、`transport=pipes`、
-`exec_encoding=raw`、`sftp=true`、`exec_subsystem=dropbear-exec-v1`。探测不输出 MOTD。
+`__dropbear_win_guide__` 返回带 frontmatter 的版本化 Markdown，作用类似随服务器提供的
+远程 `SKILL.md`：说明认证名与 Windows 令牌的区别、当前有效身份和 Session、命令执行
+规则、桌面启动边界及安全注意事项。指南嵌入 EXE，与服务版本一同更新。登录 Banner
+会公布该入口，但普通 SSH 协议不会强制客户端自动读取；Agent 或连接包装器应在规划
+Windows 工作前主动执行它。
+
+`__dropbear_win_probe__` 返回版本化 JSON，包含 `os=windows`、`shell`、`pty=false`、
+`transport=pipes`、`exec_encoding=raw`、`sftp=true`、`exec_subsystem=dropbear-exec-v1`，
+以及 SSH 认证名、真实 Windows 身份、访问令牌、Session ID、默认端口、指南命令和
+桌面启动能力。探测不输出 MOTD。
 `pty=false` 表示没有真正的控制台终端，当前管道模式不实现完整的窗口缩放和终端
 控制序列。自动化任务优先使用无 PTY exec。
 

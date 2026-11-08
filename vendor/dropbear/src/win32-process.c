@@ -847,6 +847,8 @@ static int write_session_motd(int output_fd, const wchar_t *shell,
 	append_motd(motd, sizeof(motd), &used,
 		" Command rule: ordinary SSH commands inherit the Windows user/token above and remain in this session.\r\n");
 	append_motd(motd, sizeof(motd), &used,
+		" Agent guide:  from the client run: ssh user@host __dropbear_win_guide__\r\n");
+	append_motd(motd, sizeof(motd), &used,
 		" Desktop GUI:  \"%s\" --desktop-launch \"C:\\absolute\\program.exe\" [args]\r\n",
 		safe_executable);
 	if (!strcmp(identity, "NT AUTHORITY\\SYSTEM")) {
@@ -1008,11 +1010,13 @@ int dropbear_win_spawn_shell(const char *command, const char *ssh_user,
 	startup.hStdError = stderr_write;
 
 	if (command && (!strcmp(command, "__dropbear_win_sftp__") ||
-		!strcmp(command, "__dropbear_win_exec__") || !strcmp(command, "__dropbear_win_probe__"))) {
+		!strcmp(command, "__dropbear_win_exec__") || !strcmp(command, "__dropbear_win_probe__") ||
+		!strcmp(command, "__dropbear_win_guide__"))) {
 		if (!GetModuleFileNameW(NULL, executable, MAX_PATH)) goto fail;
 		application = executable;
 		command_line = make_internal_command_line(executable,
 			!strcmp(command, "__dropbear_win_probe__") ? L"--dropbear-win-probe" :
+			!strcmp(command, "__dropbear_win_guide__") ? L"--dropbear-win-guide" :
 			!strcmp(command, "__dropbear_win_exec__") ? L"--dropbear-win-exec" : L"--dropbear-win-sftp", NULL);
 		internal_mode = 1;
 	} else if (legacy_scp_command(command)) {
