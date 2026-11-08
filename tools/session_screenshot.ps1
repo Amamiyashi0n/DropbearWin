@@ -11,6 +11,7 @@ try {
     Add-Type -TypeDefinition @'
 using System; using System.Text; using System.Runtime.InteropServices;
 public class DropbearCaptureDesktop {
+ [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
  [DllImport("user32.dll")] static extern IntPtr OpenInputDesktop(uint f, bool inherit, uint access);
  [DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr h);
  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern bool GetUserObjectInformationW(IntPtr h, int n, StringBuilder s, int size, out int needed);
@@ -22,6 +23,7 @@ public class DropbearCaptureDesktop {
  }
 }
 '@
+    $null = [DropbearCaptureDesktop]::SetProcessDPIAware()
     $desktop = [DropbearCaptureDesktop]::InputName()
     if ($desktop -ine 'Default') { throw "Input desktop is $desktop, not Default" }
     $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen

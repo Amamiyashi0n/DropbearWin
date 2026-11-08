@@ -8,7 +8,8 @@ Skill 位于 `skills/dropbear-win/`，MCP 入口位于 `tools/dropbear_mcp.py`�
 
 EXE 已内嵌完整 Skill、MCP 桥接源码和会话辅助脚本。安装或升级时，自动将
 `SKILL.md`、`mcp.json`、`dropbear_mcp.py`、`windows_exec.py`、`requirements-mcp.txt`、
-`session_screenshot.ps1`、`session_display.ps1`、`mcp-reference.md`、`agent-mcp.md`
+`session_screenshot.ps1`、`session_display.ps1`、`session_client.py`、`session_interact.ps1`、
+`session_interact.cs`、`mcp-reference.md`、`agent-mcp.md`
 和 `bundle-manifest.json` 平铺释放到 EXE 的安装目录。
 卸载时按内嵌白名单清理这些文件，默认保留 ProgramData 中的账号和主机密钥。
 安装失败会回退已更换的资源。无需再手工向目标机复制目录。
@@ -74,6 +75,12 @@ stdio 无法交互询问密码。不要把真实密码提交到仓库。
 | Tool | `dropbear_session_screenshot` | 返回指定 Session 的 PNG 图片及真实用户、Session、尺寸 |
 | Tool | `dropbear_session_display` | 查询指定会话的显示设备、当前分辨率和驱动公布的模式 |
 | Tool | `dropbear_session_set_resolution` | 预检查并修改指定会话分辨率，重新读取实际值验证 |
+| Tool | `dropbear_session_list` | 结构化 WTS 会话、真实用户名、SID、状态和可选标志 |
+| Tool | `dropbear_session_exec` | 按 Session/用户执行并收集输出，使用桌面用户环境 |
+| Tool | `dropbear_session_ui` | 在指定会话列出窗口、聚焦、点击、输入文字和快捷键 |
+| Tool | `dropbear_session_worker_start` | 在指定用户会话中启动常驻 worker |
+| Tool | `dropbear_session_worker_call` | 经 SSH/SFTP 调用该 worker 的命令、PowerShell 或 UI 操作 |
+| Tool | `dropbear_session_worker_stop` | 正常停止 worker 并清理该 worker 的临时队列 |
 | Resource | `dropbear://context` | JSON 格式的实时上下文 |
 | Resource | `dropbear://guide` | Markdown 格式的远程指南 |
 | Resource | `dropbear://manifest` | Skill/MCP 文件路径与 SHA-256 标识 |
@@ -107,6 +114,74 @@ MCP 网络端口，也不会自动安装客户端组件。
 Agent 先调用 `dropbear_manifest`、`dropbear_context` 和 `dropbear_guide`，再按任务使用执行工具。
 MCP 初始化的 instructions 及 Skill 都声明这一发现流程；客户端决定何时读取资源或
 提示词，因此不能保证所有 MCP 客户端自动把资源注入上下文。
+
+## 将操作固定在 agent 的桌面会话
+
+普通 `dropbear_exec` 和 `dropbear_run_command` 仍使用 SSH 服务的 SYSTEM 令牌。
+新增会话接口明确使用已登录用户的真实令牌、用户配置和环境。通过
+`dropbear_session_list` 读取 WTS 的结构化信息，使用 `session_id=3` 或 `username="agent"`
+选择目标；两者同时提供时核验所有者。相同用户名有多个可用会话会拒绝选择，需指定 ID。
+不会新建登录、解锁、切换其他人的 RDP 连接，也不把 SYSTEM 身份带到用户桌面。
+桌面启动、截图、显示查询和分辨率设置也接受 `username` 选择已登录用户。
+
+Premiere/After Effects 先使用 `dropbear_desktop_launch` 启动，选择同一 `username` 或
+`session_id` 并核对 PID/窗口。项目目录需要该用户可写，Node 路径需要该用户可执行。
+随后可直接调用（路径应替换为项目实际位置）：
+
+```json
+{
+  "tool": "dropbear_session_exec",
+  "arguments": {
+    "session_id": 3,
+    "username": "agent",
+    "program": "C:\\tools\\node\\node.exe",
+    "args": ["C:\\Users\\Public\\adobe-work\\scripts\\ppro-smoke.mjs"],
+    "cwd": "C:\\Users\\Public\\adobe-work",
+    "timeout": 120,
+    "encoding": "utf-8"
+  }
+}
+```
+
+`npm.cmd` 等批处理需显式通过 `cmd.exe /d /s /c` 执行。
+结果中的 `security_context` 给出真实 SID、Session、USERPROFILE、APPDATA 和 cwd；
+`execution` 给出退出码、Base64/文本输出及 `timed_out`、`output_limit_exceeded`。
+普通非零退出码正常返回。命令在恢复执行前加入 Job，结束或超时后回收该命令的子进程；
+需要常驻的 Adobe/Node 程序使用 `dropbear_desktop_launch`。
+
+重复操作可使用常驻 worker，MCP 本体留在任何会话/其他机器：
+
+1. `dropbear_session_worker_start(username="agent", idle_timeout=600)`，保存返回的 `worker_id`。
+2. `dropbear_session_worker_call(worker_id=..., method="context")` 核对实际用户/Session。
+3. `method="exec"` 的 `params` 接受 program/args/cwd/env/stdin_base64，可执行 Node/BridgeTalk CLI。
+4. `method="powershell"` 的 `params={"code":"..."}` 在独立 runspace 执行，可用 `$global:` 保存状态。
+5. `method="ui"` 的 params 接受下述 UI 字段；完成后调用 `dropbear_session_worker_stop`。
+
+worker 使用 Windows PowerShell，Node 子进程仅在执行 Node 命令时需要。每次 Node exec
+是独立进程；项目自身如需保持 Node 内部状态，可用 desktop_launch 启动现有项目的
+常驻 Node worker，再用会话命令调用其客户端。此功能提供会话执行/交互通道，未实现
+Adobe 专有 BridgeTalk 协议，也不代表某项目的 `ppro:smoke` 已通过。
+
+队列位于 ProgramData/DropbearWin 的随机 `session-<worker_id>` 目录，ACL 仅允许
+目标用户、SYSTEM 和 Administrators，传输走已有的 SSH/SFTP，不另开 localhost 服务。
+请求含唯一 ID、过期时间、SID 和 Session 核验，串行处理；不要并发提交有前后依赖的请求。
+worker 空闲 10～3600 秒自动退出，可用 worker_stop 清理已空闲退出的队列。
+主动 stop 不会关闭 Adobe 或其他独立桌面程序。会话注销会使 worker 不可用，需重新发现。
+超时不自动重试，可能已经产生部分副作用；`worker_cleanup` 记录未完成清理的 worker ID。
+卸载前请先停止仍在使用的 worker。已在 Windows 10/PowerShell 5.1 验证，核心 SSH
+保留原有系统兼容目标，旧系统的桌面交互还需满足 PowerShell 和桌面启动能力要求。
+
+UI 首先执行 `dropbear_session_ui(action="windows", username="agent")`，选定返回的窗口 ID。
+`focus/click/text/keys` 都需显式 `window_id`；点击使用物理虚拟桌面屏幕坐标（支持负坐标），
+坐标必须位于该窗口内；`keys=["CTRL","A"]` 表示快捷键。可使用现有全屏截图检查结果。
+发送前核验实际前台焦点，拒绝聚焦时不会继续发送输入。焦点竞争可能导致部分输入，需检查后
+决定是否重试。锁屏/安全桌面不解锁，输入仍受
+[Windows SendInput/UIPI](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput)
+和 [前台焦点策略](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow) 限制。
+
+回归测试：`tests/test_session_client.py` 验证选择、请求和身份约束；
+`tests/test_session_interaction.py 3 agent --node-exe C:\absolute\node.exe --ui`
+在真实会话测试用户环境、输出、超时、常驻状态以及独立测试窗口的输入，结束后清理。
 
 `dropbear_exec` 参数示例：
 

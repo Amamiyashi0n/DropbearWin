@@ -10,7 +10,7 @@
   "python": ">=3.10",
   "auto_install": false,
   "environment": ["DROPBEAR_MCP_HOST", "DROPBEAR_MCP_USER", "DROPBEAR_MCP_PASSWORD"],
-  "tools": ["dropbear_context", "dropbear_guide", "dropbear_manifest", "dropbear_sessions", "dropbear_run_command", "dropbear_exec", "dropbear_desktop_launch", "dropbear_session_screenshot", "dropbear_session_display", "dropbear_session_set_resolution"],
+  "tools": ["dropbear_context", "dropbear_guide", "dropbear_manifest", "dropbear_sessions", "dropbear_run_command", "dropbear_exec", "dropbear_desktop_launch", "dropbear_session_screenshot", "dropbear_session_display", "dropbear_session_set_resolution", "dropbear_session_list", "dropbear_session_exec", "dropbear_session_ui", "dropbear_session_worker_start", "dropbear_session_worker_call", "dropbear_session_worker_stop"],
   "resources": ["dropbear://context", "dropbear://guide", "dropbear://manifest"],
   "prompt": "dropbear_onboarding",
   "ssh_discovery": "__dropbear_win_manifest__"

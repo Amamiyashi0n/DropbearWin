@@ -6,6 +6,11 @@
 升级会覆盖它们。账号和主机密钥仍保存在 `C:\ProgramData\DropbearWin`，
 默认卸载保留；`--uninstall --purge-data` 才删除这些数据。
 
+同目录的 `session_client.py`、`session_interact.ps1` 和 `session_interact.cs`
+提供按 Session/用户执行、窗口输入和常驻 worker；运行 worker 时会在 ProgramData
+生成受 ACL 保护的临时队列目录，完成后用 `dropbear_session_worker_stop` 清理。
+会话交互使用 Windows 自带 PowerShell，已在 Windows 10/PowerShell 5.1 验证。
+
 ## 从 SSH 发现及读取
 
 ```sh

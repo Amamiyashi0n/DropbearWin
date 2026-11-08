@@ -46,6 +46,41 @@ only for this DropbearWin build; local ssh-agent and key-file discovery are disa
 | `dropbear_session_screenshot` | `session_id`, optional `expected_user`; PNG image and actual user/session/dimensions |
 | `dropbear_session_display` | `session_id`, optional `expected_user`; displays/current and driver-advertised modes |
 | `dropbear_session_set_resolution` | `session_id`, `width`, `height`; optional `expected_user`, `device`, `refresh_hz`, `test_only` |
+| `dropbear_session_list` | Structured WTS rows: ID, user, SID, state, selectable |
+| `dropbear_session_exec` | `program`, optional `args/cwd/env/stdin_base64/timeout/encoding`; select `session_id` or `username` |
+| `dropbear_session_ui` | `action=windows/focus/click/text/keys`; select `session_id` or `username`; mutations require `window_id` |
+| `dropbear_session_worker_start` | Select `session_id` or `username`, optional `idle_timeout=600`; returns `worker_id` and actual user/session/profile |
+| `dropbear_session_worker_call` | `worker_id`, `method=context/exec/powershell/ui`, `params`, optional `timeout` |
+| `dropbear_session_worker_stop` | `worker_id`; graceful stop and removal of its own queue files |
+
+Unlike ordinary SSH execution, session execution uses the logged-on user's token
+and environment. A username must resolve to one active/connected login. Both ID
+and username together verify ownership. Session 0 and disconnected logins are
+rejected. The worker needs Windows PowerShell (tested with 5.1 on Windows 10),
+but no target-side Python/Node dependency; Node is only required for Node commands.
+Desktop launch, screenshot, display queries and resolution tools also accept
+`username` instead of an explicit `session_id`; existing ID calls remain valid.
+
+The persistent worker's `exec` params mirror `dropbear_session_exec` (encoding is
+handled by the client; worker results contain base64). `powershell` takes `code`,
+retaining explicit `$global:` variables in a separate runspace. `ui` takes the
+same action/window/coordinate/text/keys fields as `dropbear_session_ui`.
+Read `execution.exit_code`, `timed_out`, `output_limit_exceeded` and actual
+`security_context`. Output is bounded to 1 MiB and stdin to 256 KiB. Foreground
+commands and descendants are job-contained; start persistent apps explicitly
+with desktop_launch. No automatic retry is made after a timeout.
+
+Workers serialize requests through per-worker ACL-protected JSON queues under
+ProgramData/DropbearWin, without opening an extra port. Requests include an ID,
+expiry and owner SID/session guard. Use worker_stop on completion; idle-expired
+workers can also be cleaned with worker_stop. A busy or crashed worker may need
+inspection; returned `worker_cleanup` errors retain the worker ID for this purpose.
+Do not concurrently submit dependent requests to the same worker.
+
+UI mutations require a window ID returned by windows in the selected session.
+Focus must actually become foreground; input uses SendInput, physical screen
+coordinates and the full virtual desktop. It cannot bypass a locked/secure
+desktop, Windows focus policy or UIPI. Verify the resulting UI independently.
 
 Display setting results include native test/change codes, before/after mode,
 `applied`, `verified`, and any `error`. `test_only=true` never applies a mode.

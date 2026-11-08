@@ -95,6 +95,7 @@ def test_wine_uninstall(executable):
     assert not directory.exists() and not data.exists(), "Refusing to overwrite existing Wine fixture data"
     expected = builder.bundle_files()
     env = dict(os.environ, WINEDEBUG="-all")
+    keepalive = None
 
     def invoke(program, *args, success=True):
         result = subprocess.run(["wine", str(program), *args], env=env,
@@ -102,6 +103,12 @@ def test_wine_uninstall(executable):
         assert (result.returncode == 0) == success, (result.returncode, result.stdout, result.stderr)
 
     try:
+        # Hold a Windows shell open across both fixtures so Wine cannot process
+        # deferred file deletions by simulating a new boot between them.
+        keepalive = subprocess.Popen(["wine", "cmd"], env=env, stdin=subprocess.PIPE,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["wine", "cmd", "/c", "ver"], env=env, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+        assert keepalive.poll() is None, "Wine keepalive shell exited before the fixture"
         for purge in (False, True):
             directory.mkdir(parents=True, exist_ok=True)
             data.mkdir(parents=True, exist_ok=True)
@@ -130,6 +137,8 @@ def test_wine_uninstall(executable):
         import shutil
         shutil.rmtree(directory, ignore_errors=True)
         shutil.rmtree(data, ignore_errors=True)
+        if keepalive is not None and keepalive.poll() is None:
+            keepalive.communicate(b"exit\r\n", timeout=10)
 
 
 if __name__ == "__main__":

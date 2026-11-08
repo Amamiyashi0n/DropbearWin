@@ -27,6 +27,7 @@ public class DropbearDisplay {
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern bool EnumDisplaySettingsW(string device,int n,ref Mode data);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int ChangeDisplaySettingsExW(string device,ref Mode data,IntPtr window,uint flags,IntPtr reserved);
  [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
+ [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
  public static Device[] Devices() {
   var result=new List<Device>();
   for(uint n=0;n<64;n++) { var d=new Device(); d.size=(uint)Marshal.SizeOf(typeof(Device)); if(!EnumDisplayDevicesW(null,n,ref d,0)) break; if((d.flags&1)!=0 && (d.flags&8)==0) result.Add(d); }
@@ -44,6 +45,7 @@ public class DropbearDisplay {
  }
 }
 '@
+    $null = [DropbearDisplay]::SetProcessDPIAware()
     function Mode-Info($m) {
         return @{width=[int]$m.width; height=[int]$m.height; refresh_hz=[int]$m.frequency;
                  bits_per_pixel=[int]$m.bits; left=$m.x; top=$m.y; orientation=[int]$m.orientation}

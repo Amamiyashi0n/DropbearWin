@@ -96,5 +96,34 @@ Changes are applied dynamically without writing display settings to the registry
 For an existing worker in a user session, keep its commands and UI operations
 in that session; SSH can coordinate through the worker's configured interface.
 
+For commands that must run as the desktop user, use `dropbear_session_exec`
+instead of ordinary `dropbear_exec`. It collects exit code and lossless streams
+from that user's session/profile/environment. Specify `session_id`, `username`,
+or both as an owner guard. `dropbear_session_list` returns structured WTS rows
+with owner SID and `selectable`; usernames matching multiple sessions are rejected.
+Use `dropbear_desktop_launch(username="agent", ...)` for persistent GUI programs.
+
+For repeated operations use `dropbear_session_worker_start(username="agent")`,
+save `worker_id`, then `dropbear_session_worker_call` with `context`, `exec`,
+`powershell` or `ui`. A dedicated PowerShell runspace retains explicit `$global:`
+state. Node/BridgeTalk commands launched by `exec` inherit the worker's user and
+session; Node is still supplied by the project. Each Node exec is a new process;
+an existing project's persistent Node worker can be launched with desktop_launch.
+Stop the worker explicitly with `dropbear_session_worker_stop` when done.
+Queues use authenticated SSH/SFTP and a per-worker user/SYSTEM/Administrators ACL;
+there is no extra network listener. Workers expire after an idle timeout.
+
+For UI, first call `dropbear_session_ui(action="windows", username="agent")` and
+select the intended window's `window_id`. Mutations require that ID: `focus`,
+`click` (physical virtual-desktop screen x/y), `text`, or `keys` (e.g. CTRL+A).
+The worker verifies foreground focus before input and reports denied focus/UIPI
+or locked desktops as errors. Partial input is possible if focus changes; inspect
+before retrying. Do not operate another session's windows to work around a failure.
+
+For Adobe workflows, launch Premiere and After Effects with desktop_launch in the
+same selected login, then run the project's BridgeTalk/ppro:smoke commands through
+session_exec or worker_call(exec). Verify the actual Adobe result and UI readiness;
+successful transport/identity checks alone do not prove the Adobe smoke suite passed.
+
 For MCP installation, environment variables and tool schemas, read
 [the integration reference](references/mcp.md).

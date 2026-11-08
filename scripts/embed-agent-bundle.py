@@ -11,7 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def bundle_files():
     files = {name: (ROOT / "tools" / name).read_bytes() for name in (
         "dropbear_mcp.py", "windows_exec.py", "requirements-mcp.txt",
-        "session_screenshot.ps1", "session_display.ps1")}
+        "session_screenshot.ps1", "session_display.ps1", "session_client.py",
+        "session_interact.ps1", "session_interact.cs")}
     files["SKILL.md"] = (ROOT / "skills/dropbear-win/SKILL.md").read_bytes().replace(
         b"references/mcp.md", b"mcp-reference.md")
     files["mcp-reference.md"] = (ROOT / "skills/dropbear-win/references/mcp.md").read_bytes().replace(

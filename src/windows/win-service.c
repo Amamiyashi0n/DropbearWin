@@ -410,7 +410,8 @@ static void clean_portable_data(const wchar_t *source_exe, const char *source_di
 	const char *names[] = { "account.conf", "hostkey_ed25519", "dropbear.pid", "service.log",
 		"SKILL.md", "mcp.json", "SKILL.md.tmp", "mcp.json.tmp", "bundle-manifest.json",
 		"dropbear_mcp.py", "windows_exec.py", "requirements-mcp.txt", "session_screenshot.ps1",
-		"session_display.ps1", "mcp-reference.md", "agent-mcp.md" };
+		"session_display.ps1", "mcp-reference.md", "agent-mcp.md", "session_client.py",
+		"session_interact.ps1", "session_interact.cs" };
 	size_t i;
 	if (!_stricmp(source_dir, target_dir) || wcslen(source_exe) >= 32768) return;
 	wcscpy(executable, source_exe);
@@ -757,7 +758,8 @@ static int remove_installed_data(const char *directory) {
 	const char *names[] = { "account.conf", "hostkey_ed25519", "dropbear.pid", "service.log",
 		"SKILL.md", "mcp.json", "SKILL.md.tmp", "mcp.json.tmp", "bundle-manifest.json",
 		"dropbear_mcp.py", "windows_exec.py", "requirements-mcp.txt", "session_screenshot.ps1",
-		"session_display.ps1", "mcp-reference.md", "agent-mcp.md" };
+		"session_display.ps1", "mcp-reference.md", "agent-mcp.md", "session_client.py",
+		"session_interact.ps1", "session_interact.cs" };
 	char path[MAX_PATH];
 	size_t i;
 	for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {

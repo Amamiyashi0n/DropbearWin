@@ -20,6 +20,23 @@ import dropbear_mcp
 
 
 class FixtureRemote(Remote):
+    def session_list(self):
+        return {"sessions": [{"session_id": 3, "username": "agent", "windows_user": "host\\agent",
+            "sid": "S-1-5-21-fixture", "state": "Active", "selectable": True}]}
+
+    def session_worker_start(self, session_id=None, username=None, idle_timeout=600):
+        return {"worker_id": "a" * 32, "security_context": self.session_resolve(session_id, username)}
+
+    def session_worker_call(self, worker_id, method, params=None, timeout=30):
+        return {"session_id": 3, "windows_user": "host\\agent", "method": method}
+
+    def session_worker_stop(self, worker_id):
+        return {"stopped": True}
+
+    def session_action(self, method, params, session_id=None, username=None, timeout=30):
+        return {"security_context": self.session_resolve(session_id, username),
+                "execution": {"exit_code": 7, "stdout_base64": "b2s=", "stderr_base64": ""}}
+
     def session_display(self, session_id, expected_user=None, width=None, height=None,
                         device=None, refresh_hz=None, test_only=False):
         if width is None:
@@ -64,7 +81,22 @@ class MCPContract(unittest.IsolatedAsyncioTestCase):
                 listed = await client.list_tools()
                 tools = {tool.name: tool for tool in listed.tools}
                 self.assertEqual(set(tools), {"dropbear_context", "dropbear_guide",
-                    "dropbear_manifest", "dropbear_sessions", "dropbear_run_command", "dropbear_exec", "dropbear_desktop_launch", "dropbear_session_screenshot", "dropbear_session_display", "dropbear_session_set_resolution"})
+                    "dropbear_manifest", "dropbear_sessions", "dropbear_run_command", "dropbear_exec", "dropbear_desktop_launch", "dropbear_session_screenshot", "dropbear_session_display", "dropbear_session_set_resolution",
+                    "dropbear_session_list", "dropbear_session_exec", "dropbear_session_ui", "dropbear_session_worker_start", "dropbear_session_worker_call", "dropbear_session_worker_stop"})
+                self.assertEqual(set(tools), set(json.loads((ROOT / "src/windows/agent-mcp.json").read_bytes())["tools"]))
+                listed_sessions = await client.call_tool("dropbear_session_list")
+                self.assertEqual(json.loads(listed_sessions.content[0].text)["sessions"][0]["session_id"], 3)
+                executed = await client.call_tool("dropbear_session_exec", {
+                    "program": "C:\\Windows\\System32\\cmd.exe", "username": "agent"})
+                self.assertFalse(executed.isError)
+                self.assertEqual(json.loads(executed.content[0].text)["execution"]["stdout"], "ok")
+                worker = await client.call_tool("dropbear_session_worker_start", {"username": "agent"})
+                self.assertFalse(worker.isError)
+                worker_id = json.loads(worker.content[0].text)["worker_id"]
+                called = await client.call_tool("dropbear_session_worker_call", {"worker_id": worker_id, "method": "context"})
+                self.assertEqual(json.loads(called.content[0].text)["session_id"], 3)
+                stopped = await client.call_tool("dropbear_session_worker_stop", {"worker_id": worker_id})
+                self.assertTrue(json.loads(stopped.content[0].text)["stopped"])
                 self.assertTrue(tools["dropbear_context"].annotations.readOnlyHint)
                 self.assertTrue(tools["dropbear_exec"].annotations.destructiveHint)
                 display = await client.call_tool("dropbear_session_display", {"session_id": 3})
@@ -76,6 +108,8 @@ class MCPContract(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(shot.isError)
                 self.assertEqual(shot.content[1].type, "image")
                 self.assertEqual(shot.content[1].mimeType, "image/png")
+                by_user = await client.call_tool("dropbear_session_screenshot", {"username": "agent"})
+                self.assertFalse(by_user.isError)
                 self.assertTrue(base64.b64decode(shot.content[1].data).startswith(b"\x89PNG"))
                 resources = await client.list_resources()
                 self.assertEqual({str(r.uri) for r in resources.resources},

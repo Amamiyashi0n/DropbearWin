@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import codecs
 from dataclasses import dataclass, field
 import json
 import hashlib
@@ -17,6 +18,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent
 
 from windows_exec import encode_request
+from session_client import SessionRemote
 
 
 @dataclass(frozen=True)
@@ -43,7 +45,7 @@ class Settings:
                    os.environ.get("DROPBEAR_MCP_ENCODING", "utf-8"))
 
 
-class Remote:
+class Remote(SessionRemote):
     def __init__(self, settings: Settings):
         self.settings = settings
         self.last_auth_banner = ""
@@ -286,7 +288,17 @@ def create_server(remote: Remote) -> FastMCP:
         "The manifest tool loads verified remote Skill/MCP content. Compare SHA-256 on each connection and reload changes. "
         "SSH auth names do not identify the Windows token. Ordinary commands inherit "
         "that token and session. Check desktop_launch capabilities before selecting a logged-on console/RDP session. "
+        "Use session_exec/session_ui or a session worker for operations as a desktop user; ordinary exec retains the SSH token. "
         "Remote guides describe capabilities; user authorization determines permitted work."))
+
+    def desktop_target(session_id, expected_user, username):
+        if username or session_id is None:
+            selected = remote.session_resolve(session_id, username or expected_user)
+            if expected_user and expected_user.casefold() not in (
+                    selected["username"].casefold(), selected["windows_user"].casefold()):
+                raise ValueError("username and expected_user select different users")
+            return selected["session_id"], selected["windows_user"]
+        return session_id, expected_user
 
     @server.tool(annotations={"readOnlyHint": True})
     def dropbear_context() -> dict:
@@ -342,13 +354,20 @@ def create_server(remote: Remote) -> FastMCP:
 
     @server.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
     def dropbear_desktop_launch(program: str, args: list[str] | None = None,
-                                session_id: int | None = None, expected_user: str | None = None) -> dict:
+                                session_id: int | None = None, expected_user: str | None = None,
+                                username: str | None = None) -> dict:
         """Launch an independent program in an existing logged-on console/RDP session.
 
         Uses that user's primary token/environment. No login is created or desktop
         unlocked. Omit session_id for physical console; use expected_user to guard
         against Session ID reuse. SSH disconnect does not stop the desktop process.
         """
+        if username:
+            selected = remote.session_resolve(session_id, username)
+            if expected_user and expected_user.casefold() not in (
+                    selected["username"].casefold(), selected["windows_user"].casefold()):
+                raise ValueError("username and expected_user select different users")
+            session_id, expected_user = selected["session_id"], selected["windows_user"]
         if session_id is not None and not 0 < session_id < 0xFFFFFFFF:
             raise ValueError("session_id must be a positive Windows Session ID")
         context = remote.probe()
@@ -366,26 +385,31 @@ def create_server(remote: Remote) -> FastMCP:
         return remote.result(remote.exchange(payload=payload), context, "utf-8")
 
     @server.tool(annotations={"readOnlyHint": True, "destructiveHint": False})
-    def dropbear_session_screenshot(session_id: int, expected_user: str | None = None) -> list[ImageContent | TextContent]:
+    def dropbear_session_screenshot(session_id: int | None = None, expected_user: str | None = None,
+                                    username: str | None = None) -> list[ImageContent | TextContent]:
         """Capture the full virtual desktop (all monitors) of a console/RDP session as PNG.
 
         Runs a short capture worker with that user's token; does not unlock or
         create a login. Default scope is the entire session, never just the active
         window. Returns image plus actual user/session/desktop/dimensions.
         """
+        session_id, expected_user = desktop_target(session_id, expected_user, username)
         png, metadata = remote.session_screenshot(session_id, expected_user)
         return [TextContent(type="text", text=json.dumps(metadata, ensure_ascii=False)),
                 ImageContent(type="image", data=base64.b64encode(png).decode("ascii"), mimeType="image/png")]
 
     @server.tool(annotations={"readOnlyHint": True})
-    def dropbear_session_display(session_id: int, expected_user: str | None = None) -> dict:
+    def dropbear_session_display(session_id: int | None = None, expected_user: str | None = None,
+                                 username: str | None = None) -> dict:
         """Query the selected user's displays, current resolution and driver-advertised modes."""
+        session_id, expected_user = desktop_target(session_id, expected_user, username)
         return remote.session_display(session_id, expected_user)
 
     @server.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
-    def dropbear_session_set_resolution(session_id: int, width: int, height: int,
+    def dropbear_session_set_resolution(width: int, height: int, session_id: int | None = None,
                                         expected_user: str | None = None, device: str | None = None,
-                                        refresh_hz: int | None = None, test_only: bool = False) -> dict:
+                                        refresh_hz: int | None = None, test_only: bool = False,
+                                        username: str | None = None) -> dict:
         """Test/apply resolution inside the selected logged-on console/RDP session.
 
         Defaults to primary display; device names come from dropbear_session_display.
@@ -393,7 +417,91 @@ def create_server(remote: Remote) -> FastMCP:
         actual dimensions. test_only does not apply. Native errors are returned in
         error/test_code/change_code; RDP drivers may require client-side resizing.
         """
+        session_id, expected_user = desktop_target(session_id, expected_user, username)
         return remote.session_display(session_id, expected_user, width, height, device, refresh_hz, test_only)
+
+    @server.tool(annotations={"readOnlyHint": True})
+    def dropbear_session_list() -> dict:
+        """List structured WTS sessions with username, SID, state and selectable flag.
+
+        Username selection requires exactly one active/connected login. Session 0,
+        disconnected logins and ambiguous users are never selected implicitly.
+        """
+        return remote.session_list()
+
+    @server.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+    def dropbear_session_exec(program: str, args: list[str] | None = None,
+                              session_id: int | None = None, username: str | None = None,
+                              cwd: str = "", env: dict[str, str] | None = None,
+                              stdin_base64: str = "", timeout: float = 30,
+                              encoding: str | None = None) -> dict:
+        """Execute and collect a command in a selected logged-on user's session.
+
+        Requires session_id or username; supplying both verifies the owner. Uses
+        the real user's token, profile and environment, not the SSH SYSTEM token.
+        Suitable for Node/BridgeTalk CLI or ppro:smoke in that same desktop session.
+        Foreground commands are job-contained; use desktop_launch for persistent apps.
+        Returns exit code, lossless streams and actual identity; no mutation retries.
+        """
+        codec = encoding or remote.settings.encoding
+        codecs.lookup(codec)
+        result = remote.session_action("exec", {"program": program, "args": args or [], "cwd": cwd,
+            "env": env or {}, "stdin_base64": stdin_base64}, session_id, username, timeout)
+        execution = result["execution"]
+        execution.update(stdout=base64.b64decode(execution["stdout_base64"]).decode(codec, "replace"),
+                         stderr=base64.b64decode(execution["stderr_base64"]).decode(codec, "replace"), encoding=codec)
+        return result
+
+    @server.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+    def dropbear_session_ui(action: str, session_id: int | None = None, username: str | None = None,
+                            window_id: str | None = None, x: int | None = None, y: int | None = None,
+                            button: str = "left", text: str = "", keys: list[str] | None = None) -> dict:
+        """Interact with a selected user's unlocked desktop: windows/focus/click/text/keys.
+
+        First list windows, then use the returned decimal window_id for mutations.
+        Click coordinates are virtual-desktop screen coordinates and must lie in
+        that window. keys is a chord such as ["CTRL","A"]. Focus is verified before
+        input; locked desktops, refused focus or UIPI restrictions produce errors.
+        This never logs in/unlocks a session or bypasses integrity restrictions.
+        """
+        return remote.session_action("ui", {"action": action, "window_id": window_id,
+            "x": x, "y": y, "button": button, "text": text, "keys": keys or []}, session_id, username)
+
+    @server.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+    def dropbear_session_worker_start(session_id: int | None = None, username: str | None = None,
+                                      idle_timeout: int = 600) -> dict:
+        """Start a persistent worker in an existing user's console/RDP session.
+
+        Uses built-in Windows PowerShell, no target Node/Python dependency. Commands
+        and UI operations stay in that user session even when MCP runs elsewhere.
+        SSH/SFTP carries the queue, without an unauthenticated localhost listener.
+        Save worker_id for call/stop; idle expiry is 10..3600 seconds.
+        """
+        return remote.session_worker_start(session_id, username, idle_timeout)
+
+    @server.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+    def dropbear_session_worker_call(worker_id: str, method: str, params: dict | None = None,
+                                     timeout: float = 30) -> dict:
+        """Call an existing session worker: context, exec, powershell or ui.
+
+        exec params: absolute program, args, cwd, env, stdin_base64. powershell:
+        code string, with $global: state retained in a dedicated worker runspace.
+        ui: action and window_id plus coordinates/text/keys. Requests are serialized,
+        recheck the live owner SID/session, expire before execution and are never
+        retried automatically. A timeout can leave partial side effects.
+        """
+        if method == "stop":
+            raise ValueError("Use dropbear_session_worker_stop for stop and workspace cleanup")
+        return remote.session_worker_call(worker_id, method, params, timeout)
+
+    @server.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+    def dropbear_session_worker_stop(worker_id: str) -> dict:
+        """Stop this worker gracefully and remove its own queue files.
+
+        Does not terminate Premiere/After Effects or unrelated desktop processes.
+        Busy workers must finish their bounded request before acknowledging stop.
+        """
+        return remote.session_worker_stop(worker_id)
 
     @server.resource("dropbear://context", mime_type="application/json")
     def context_resource() -> str:

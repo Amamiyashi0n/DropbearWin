@@ -365,6 +365,11 @@ rem 指定已登录的 RDP 会话，并校验该会话属于 agent：
 UAC 和应用初始化仍可能影响 UI 自动化，启动返回 PID 不等于应用已就绪。
 
 MCP 提供 `dropbear_desktop_launch` 和 `dropbear_session_screenshot`。
+还可用 `dropbear_session_list` 结构化发现登录用户和 SID，按 Session 或用户名使用
+`dropbear_session_exec` 执行命令、`dropbear_session_ui` 聚焦/点击/输入，或通过
+`dropbear_session_worker_start/call/stop` 在该用户桌面中持续接收操作。
+worker 使用该用户的真实令牌和配置，经 SSH/SFTP 收发请求；Node/BridgeTalk 命令
+可在这里执行，普通 SSH 的 SYSTEM 命令接口继续保留。完整例子见下方集成文档。
 例如截图参数 `session_id=3, expected_user="agent"`，返回 PNG 图片及实际用户、会话和
 屏幕尺寸。截图使用该用户桌面的短时进程，经 SFTP 取回后清理临时文件，详见
 [Skill 与 MCP 集成](docs/agent-mcp.md)。
