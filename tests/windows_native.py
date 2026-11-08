@@ -66,6 +66,7 @@ def run(executable, backend):
                         time.sleep(.1)
                 else:
                     raise RuntimeError("server startup timed out")
+                assert " skill-mcp=__dropbear_win_manifest__" in client.get_transport().remote_version
                 discovery = client.get_transport().get_banner()
                 assert discovery and b"DropbearWin Agent discovery" in discovery, discovery
                 manifest_bytes, err, status = execute(client, "__dropbear_win_manifest__")

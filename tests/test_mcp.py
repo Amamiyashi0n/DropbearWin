@@ -4,6 +4,7 @@ import base64
 import json
 import hashlib
 import os
+import socket
 from pathlib import Path
 import sys
 import unittest
@@ -120,6 +121,14 @@ class TransportTests(unittest.TestCase):
 
 async def live():
     remote = Remote(Settings.from_env())
+    # The discovery entrypoint must be visible before key exchange/authentication.
+    with socket.create_connection((remote.settings.host, remote.settings.port), timeout=8) as sock:
+        with sock.makefile("rb") as stream:
+            identification = stream.readline(256)
+    assert identification.startswith(b"SSH-2.0-dropbear_") and identification.endswith(b"\r\n"), identification
+    assert b" skill-mcp=__dropbear_win_manifest__" in identification, identification
+    assert len(identification) <= 255, identification
+    print("Raw SSH identification:", identification.decode("ascii").rstrip())
     probe = remote.probe()
     assert "DropbearWin Agent discovery" in probe["ssh_auth_banner"], probe
     tracked = remote.tracked_skill()

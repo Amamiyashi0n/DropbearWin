@@ -192,7 +192,14 @@ $env:DROPBEAR_WIN_SHELL = 'powershell'
 .\dropbear-win-x64.exe
 ```
 
-SSH 连接时默认通过认证 Banner 公布 Agent 发现入口，非交互 exec/SFTP 也可收到，
+SSH 初始协议标识行也携带发现入口，直接读取 TCP 开头就能看到：
+
+```text
+SSH-2.0-dropbear_2026.94 skill-mcp=__dropbear_win_manifest__
+```
+
+`skill-mcp` 位于协议允许的注释字段，不改变软件版本或认证方式；拿到入口后，应完成
+SSH 认证再执行对应命令读取清单。SSH 连接还默认通过认证 Banner 公布详细指引，非交互 exec/SFTP 也可收到，
 命令 stdout 保持原样。Agent 每次连接应检查 Skill/MCP 文件指纹，再读取实时探测，
 并根据 `shell` 决定语法：
 

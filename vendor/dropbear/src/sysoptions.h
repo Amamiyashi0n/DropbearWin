@@ -11,7 +11,14 @@
 #ifndef IDENT_VERSION_PART
 #define IDENT_VERSION_PART "_" DROPBEAR_VERSION
 #endif
+#ifdef DROPBEAR_WIN32_NATIVE
+/* RFC 4253 section 4.2 comments: advertise discovery even to raw TCP probes.
+ * Keep this exact string shared by version exchange and the KEX hash. */
+#define LOCAL_IDENT "SSH-2.0-dropbear" IDENT_VERSION_PART " skill-mcp=__dropbear_win_manifest__"
+typedef char dropbear_win_ident_length_check[(sizeof(LOCAL_IDENT "\r\n") - 1 <= 255) ? 1 : -1];
+#else
 #define LOCAL_IDENT "SSH-2.0-dropbear" IDENT_VERSION_PART
+#endif
 #define PROGNAME "dropbear"
 
 #ifndef DROPBEAR_CLIENT

@@ -10,7 +10,11 @@ the connection environment or client secret store; do not put them into this ski
 
 ## Discover before operating
 
-SSH authentication publishes an Agent discovery banner, including for non-PTY
+The initial SSH identification advertises `skill-mcp=__dropbear_win_manifest__`
+in its comments field. Follow that entrypoint after SSH authentication to discover
+the remote Skill/MCP files even when authentication banners are hidden or filtered.
+
+SSH authentication also publishes an Agent discovery banner, including for non-PTY
 commands and SFTP. It points to the actual remote `SKILL.md` and `mcp.json`.
 Some SDKs expose this through their authentication-banner API rather than text.
 

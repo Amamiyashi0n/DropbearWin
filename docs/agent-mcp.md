@@ -58,7 +58,11 @@ stdio 无法交互询问密码。不要把真实密码提交到仓库。
 | Resource | `dropbear://manifest` | Skill/MCP 文件路径与 SHA-256 标识 |
 | Prompt | `dropbear_onboarding` | 将实时上下文与指南载入当前任务 |
 
-SSH 认证阶段默认发送 Agent discovery Banner，非交互 exec 和 SFTP 同样收到，
+SSH 最初的协议标识行包含 `skill-mcp=__dropbear_win_manifest__`，直接读取 TCP 开头
+及 OpenSSH `-v` 的远端版本行即可发现入口。该标识位于 RFC 4253 的可选注释字段，
+整行（包含 CRLF）不超过 255 字节；读取完整清单仍需 SSH 认证。
+
+SSH 认证阶段还默认发送 Agent discovery Banner，非交互 exec 和 SFTP 同样收到，
 OpenSSH 客户端显示在 stderr；不会把指引混入命令的 stdout、SFTP 或 DBX2 数据流。
 SDK 客户端可能需要读取认证 Banner API（例如 Paramiko `Transport.get_banner()`）。
 静默模式和部分客户端可能隐藏此消息。
