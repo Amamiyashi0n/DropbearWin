@@ -268,3 +268,5 @@ WINEPREFIX="$PWD/build/wine-setup-test" python3 tests/test_setup_prompt.py \
 
 维护上游源码快照时参见 [依赖边界](docs/dependencies.md)。许可与版权见
 [项目许可](LICENSE) 和 [Dropbear 及组件许可](vendor/dropbear/LICENSE)。
+
+目标仓库初始化时的 [MPL 2.0 许可文本](LICENSES/MPL-2.0.txt) 单独保留。
