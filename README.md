@@ -1,473 +1,270 @@
-# Dropbear for native Windows
+# Dropbear-win
 
-## 仓库目录
+Dropbear-win 是基于 Dropbear 的原生 Windows SSH 服务端。它提供 x64 和 x86 单文件 EXE，
+支持便携运行、安装为开机自启服务、SSH 命令执行、SFTP/SCP 文件传输，以及通过 Skill 和
+MCP 操作已登录的 Windows 桌面。目标机运行基础 SSH 服务只需对应架构的 EXE 和 Windows
+系统组件。
 
-```text
-.
-├── vendor/dropbear/   引用的 Dropbear 源码快照，含现有 Windows 适配补丁
-├── src/windows/       Windows 服务、端口接管、日志与资源信息集成
-├── tests/             Dropbear-win 的 Windows SSH 回归测试
-├── tools/             Agent 调用端工具
-├── skills/            可安装的 DropbearWin Agent Skill
-├── scripts/           Linux 交叉编译与 Windows 本机构建入口
-├── docs/              Dropbear-win 的维护与依赖说明
-├── build/             本地构建缓存，Git 忽略
-└── dist/              可交付 EXE 与本地运行数据，Git 忽略
-```
+## 快速开始
 
-这是 Dropbear-win 仓库；Dropbear 的源码、Autotools、加密库、Unix 测试、工作流及
-文档整体放在 `vendor/dropbear/`，不作为本项目的顶层目录。依赖目录保持原有内部
-布局。当前引用是包含 Windows 修改的源码快照，并非干净的上游发布包或 Git 子模块；
-维护方式见 [依赖说明](docs/dependencies.md)。构建使用 `build/x64` 和
-`build/x86`。
+从 [构建](#构建) 步骤生成 EXE，将对应架构的文件复制到 Windows 上的便携目录。
 
-该项目把 Dropbear SSH server 编译为原生 Windows 控制台程序，也支持 SCM 服务模式。
-MinGW-w64 只参与编译；Linux 交叉构建无需 MSYS2，目标机不需要 MSYS2、MinGW、
-Cygwin、PowerShell 或额外运行库。
-EXE 内嵌 `requireAdministrator` 清单：在支持 UAC 的 Windows 上，手动启动时由
-系统弹出管理员权限提示；服务由 SCM 启动，不需要有人登录确认。
-
-两个交付文件均为静态单文件：
-
-| 文件 | 架构 | PE/系统兼容基线 |
+| Windows 架构 | 构建产物 | PE 兼容基线 |
 | --- | --- | --- |
-| `dist\dropbear-win-x64.exe` | x64 | NT 5.2：XP x64 SP2、Server 2003 SP2 |
-| `dist\dropbear-win-x86.exe` | x86 | NT 5.1：XP SP3、WinPE 1.6 |
+| x64 | `dist/dropbear-win-x64.exe` | NT 5.2 |
+| x86 | `dist/dropbear-win-x86.exe` | NT 5.1 |
 
-SSH 面向新版 OpenSSH 和 Xshell，只提供 ED25519 主机密钥及现代算法，不启用 RSA、
-SHA-1、CBC、group1、3DES 或 DSS。XP、Server 2003 和 WinPE 1.6 的真实设备运行结果
-仍需在对应设备上验证；构建过程会执行 PE 版本和旧系统 API 静态门禁。
-
-## 构建
-
-在 Linux 上使用 MinGW-w64 交叉编译。构建机需要 Bash、make、Python 3，
-以及 `x86_64-w64-mingw32-*` 和 `i686-w64-mingw32-*` 的 GCC/binutils 工具链。
-GCC 需支持 `-mcrtdll=msvcrt-os`，以链接旧版 Windows 的系统 CRT：
-
-```bash
-bash scripts/build-cross.sh --clean
-```
-
-`--architecture` 可取 `x64`、`x86` 或 `all`，默认值为 `all`；`--jobs N` 设置并行任务数。
-x64 和 x86 使用独立
-构建目录 `build/x64`、`build/x86`，输出分别位于 `dist\dropbear-win-x64.exe` 和
-`dist\dropbear-win-x86.exe`。
-
-Windows 本机仍可使用 `scripts/build-native.ps1` 与 MSYS2 构建。交叉编译脚本会检查
-PE 机器类型、子系统版本、DLL/API 导入表及静态链接状态，并拒绝 Vista+ API、UCRT
-或 MSYS2 运行库依赖。
-
-每次构建生成 `dist/build-manifest.json`，列出本次实际生成的架构、文件名、大小和
-SHA-256。部署时使用清单中的 EXE；`dist/` 不保留旧版 EXE。
-
-## 运行
-
-直接运行：
+在目标机双击 EXE，或通过 PowerShell 启动。
 
 ```powershell
 .\dropbear-win-x64.exe
-# 32 位系统使用：.\dropbear-win-x86.exe
 ```
 
-首次运行会询问自定义 SSH 用户名和密码，随后默认监听 `0.0.0.0:22`。
-**权限提醒：此 SSH 账号有意独立于 Windows 用户数据库；认证成功不会切换 Windows
-访问令牌。远程命令和文件传输继承启动 EXE 的 Windows 身份；注册为默认服务时，
-该身份是 LocalSystem。** 绿色版直接运行时，数据位于 EXE 旁的
-`dropbear-win-data`；同一目录中的 x64 与 x86 程序可共用账号和主机密钥。
-
-监听成功后，控制台会显示 `[OK]`、`RUNNING`、绑定地址、实际可访问的本机 IPv4
-地址、SSH 连接命令、认证用户名、Shell、PID 和数据目录。端口占用等监听错误不会
-显示成功状态，进程会返回非零退出码。
-
-所有 Windows TCP 监听使用独占绑定。默认 **22** 发生冲突时，新实例会查询
-实际监听 PID，终止旧监听进程及其可回收的子进程，等待结束并重新独占绑定；这也
-适用于占用 22 的其他程序。旧 SSH 会话和任务会结束，账号与主机密钥保留。
-多个实例同时启动时会串行执行接管。权限不足或端口仍未释放时，新实例明确报错
-退出，不报告 RUNNING，不退回共享绑定。其他端口发生冲突时只报错，不终止占用者。
-远程端口转发请求不会触发进程接管。
-
-配置了多个监听端口时，任何一项失败都会使启动失败，避免显示未实际监听的地址。
-已有 `account.conf` 会检查内容格式，损坏或读取失败时明确报错；`-h`、`-V` 不会
-进入首次账号设置。Ctrl+C、Ctrl+Break 和关闭控制台窗口均触发退出清理。
-普通连接日志先格式化完整一行，再通过监听进程与连接进程共享的互斥量写出；
-exec 字节调试日志也在同一把锁内输出完整记录，避免多个进程在同一个控制台或
-服务日志中逐字符交错。
-
-### 口令认证与验证开销
-
-本移植只提供口令认证：公钥、证书和密钥登录被有意关闭（`DROPBEAR_SVR_PUBKEY_AUTH`
-编译为 0），因此不读取 `authorized_keys`，也不需要分发或维护密钥。口令以标准
-PBKDF2-HMAC-SHA256（`pbkdf2-sha256$迭代数$盐$摘要`，默认 100000 次）保存，
-与 `hashlib.pbkdf2_hmac` 逐字节兼容，单次长度上限为
-`DROPBEAR_MAX_PASSWORD_LEN`（100 字节）。
-
-每次口令尝试都要完成一次完整派生，未认证客户端可以随意建连，因此派生并发数有
-全局上限：默认取处理器数的四分之一，最少 1、最多 3，可用启动前的
-`DROPBEAR_WIN_KDF_CONCURRENCY=1..16` 覆盖。上限通过会话命名互斥量在监听进程和
-所有连接进程之间共享；拿不到名额的尝试最多等待 30 秒后失败，避免排队无限增长。
-一次失败尝试的服务端 CPU 约 50 ms（优化前的 HMAC 实现约 128 ms）；在默认预认证
-限制与进程启动限速之下，30 路未认证连接同时爆破的实测服务端 CPU 约 0.8 核，
-同时正常口令登录仍在 0.3 秒内完成。上限只限制并发派生数，不改变失败尝试的
-固定退避和每连接最大尝试次数。
-
-### 连接限制与泛洪防护
-
-未认证连接是端口洪水的入口，服务在监听进程一侧做了四层防护，全部默认生效：
-
-1. **并发槽位上限与复用**。默认每个来源地址最多 5 个、全局最多 5 个未认证连接
-   进程，超限连接被立即关闭；连接退出或完成认证的瞬间槽位即回收复用。槽位在
-   内核 backlog 上排队等待，不消耗进程和内存。
-2. **预认证绝对宽限**。连接建立后必须在 60 秒内完成认证，超时断开；持续发送
-   数据不能延长宽限，慢速滴注（slowloris）无法长期霸占槽位。正常客户端的
-   密钥交换与认证在 1 秒内完成，交互输密码远低于该上限。
-3. **进程启动令牌桶**。新连接进程默认以每秒 10 个、突发 20 个的速率启动；
-   预算耗尽时新连接在监听 backlog 中排队等待下一轮配额，而不是被关闭。重连
-   洪水因此无法把监听进程的 spawn 开销放大成 CPU 负载。
-4. **失败背退**。accept 或连接进程创建持续失败（句柄/描述符耗尽）时，监听
-   循环自动休眠背退，不会空转打满 CPU。
-
-以上默认值均可用启动前的环境变量覆盖：`DROPBEAR_WIN_MAX_UNAUTH=1..30`（全局
-未认证上限）、`DROPBEAR_WIN_MAX_UNAUTH_PER_IP`（每地址上限，不超过全局值）、
-`DROPBEAR_WIN_AUTH_TIMEOUT=1..600`（预认证宽限秒数）、`DROPBEAR_WIN_CONN_RATE=
-1..200`（每秒启动配额）。设置 `DROPBEAR_WIN_TRACE_LIMITS=1` 后，服务端日志会
-按类型记录限流拒绝（每类每秒最多一条），用于现场排查。
-
-`tests/windows_flood.py` 回归覆盖：五槽位上限与超限快速关闭、拒绝风暴的 CPU
-上界、宽限超时后的槽位回收、令牌桶的排队与匀速放行。
-
-认证成功后的会话不受以上限制约束，由口令门槛保护。
-
-交互式 SSH 登录会在 Shell 提示符之前显示 MOTD，其中包括 Windows 内核版本和
-架构、当前二进制架构、系统兼容模式、主机名、SSH/Windows 用户、当前访问令牌和
-完整性级别、Shell、客户端请求的终端类型、实际终端传输方式、连接地址、工作目录
-及系统代码页。通过 SSH 执行单条命令时不输出 MOTD，便于脚本稳定读取标准输出。
-
-欢迎页还显示登录时的资源快照：服务器本地时间、逻辑处理器数、CPU 忙碌百分比
-（约 200 ms 采样，当前处理器组）、物理内存已用/总量/可用及占用率，以及当前
-工作目录所在卷的已用/总量/可用和占用率。容量使用 GiB；磁盘按当前 Windows
-身份可见的配额统计。读取失败的指标显示 `unavailable`，不阻止登录。数据为一次性
-登录时采集的最新数据，每次登录或打开新的交互式 Shell 都重新采集，显示后不持续
-刷新，不复用上次登录的数据；普通 exec、结构化执行和 SFTP 不插入欢迎页。
-
-CMD 交互 Shell 和带 PTY 的 CMD 远程命令会在 SSH 管道边界进行双向流式转码：客户端一侧
-统一为 UTF-8，`cmd.exe` 一侧使用目标系统的 OEM 代码页。PowerShell 后端使用原始字节流。
-未请求 PTY 的远程命令保持原始字节不变；需要终端文本转码时使用 `ssh -t`，需要
-重定向或传输原始数据时不要请求 PTY。
-
-MOTD 会分别列出客户端文本编码、Shell 代码页及其 Windows 名称、输入和输出方向
-的转换规则，并明确提示无 PTY 的远程命令保留原始字节且不做文本转换。Shell 为
-`cmd.exe` 时，MOTD 会额外给出 `CMD encoding` 行，明确标注 cmd.exe 当前会话正在
-使用的代码页及其 Windows 名称；MOTD 本身始终以 UTF-8 直写进 SSH 通道、不经过
-终端转码，两端看到的文本完全一致。
-
-默认 shell 是系统目录中的 `cmd.exe`。可以在启动前设置
-`DROPBEAR_WIN_SHELL=powershell` 显式选择系统 Windows PowerShell；后端缺失或配置
-拼写错误时启动报错，不会悄悄切换解释器。可通过 Dropbear 的 `-p` 参数覆盖监听地址或端口，例如：
-
-```powershell
-.\dropbear-win-x64.exe -p 22222
-.\dropbear-win-x64.exe -p 127.0.0.1:22222
-```
-
-## Windows agent 自动化
-
-Windows 管道现在等待真正的输出 EOF 后再结束通道，避免进程刚退出时截断尚在桥接
-线程中的输出。Winsock 非阻塞背压统一映射为 Dropbear 使用的 `EAGAIN`，避免大块
-输出时出现 `Error writing: Unknown error` 并断开 SSH。
-
-命令进程退出时通过 Windows 等待回调立即唤醒 SSH 会话循环，减少短命令等待退出码
-时的轮询延迟；回调仅负责通知，进程回收和通道关闭仍由会话线程处理，输出仍等待
-真实 EOF。`tests/windows_latency.py EXE 报告.json` 可测量持久连接上有输出和无输出
-短命令的完整往返延迟，每类预热 5 次后统计 30 次。
-
-服务使用 Windows 原生执行语义，不包含 BusyBox 或 POSIX shell。普通 SSH exec 默认
-按 CMD 语法解析。服务端为 CMD `/s /c` 添加外层引号，保留命令内部引号；PowerShell
-后端使用 UTF-16LE `-EncodedCommand`，不经过 CMD。命令在客户端发送之前已丢失的
-引号仍需在客户端修正。复杂或很长的脚本建议通过 SFTP 上传后执行。
-
-选择 PowerShell（CMD 中可用 `set DROPBEAR_WIN_SHELL=powershell`）：
-
-```powershell
-$env:DROPBEAR_WIN_SHELL = 'powershell'
-.\dropbear-win-x64.exe
-```
-
-SSH 初始协议标识行也携带发现入口，直接读取 TCP 开头就能看到：
+1. 在启用 UAC 的系统上同意管理员权限请求。
+2. 首次启动输入 SSH 用户名和密码，再输一遍确认。两次密码不一致时可重新输入。
+3. 账号就绪后选择运行方式。输入 `y` 并回车，安装为 Windows 服务。直接回车则继续便携运行。
 
 ```text
-SSH-2.0-dropbear_2026.94 skill-mcp=__dropbear_win_manifest__
+Register this server as the Windows service "DropbearWin"? [y/N]
 ```
 
-`skill-mcp` 位于协议允许的注释字段，不改变软件版本或认证方式；拿到入口后，应完成
-SSH 认证再执行对应命令读取清单。SSH 连接还默认通过认证 Banner 公布详细指引，非交互 exec/SFTP 也可收到，
-命令 stdout 保持原样。Agent 每次连接应检查 Skill/MCP 文件指纹，再读取实时探测，
-并根据 `shell` 决定语法：
+便携版显示 `[OK]` 和 `RUNNING` 后，可在另一台机器上连接。将示例中的认证名和
+主机地址替换为启动时设置的 SSH 用户名和控制台显示的目标地址。
 
-```text
-ssh -p 22 user@host __dropbear_win_manifest__
-ssh -p 22 user@host __dropbear_win_skill__
-ssh -p 22 user@host __dropbear_win_mcp__
-ssh -p 22 user@host __dropbear_win_guide__
-ssh -p 22 user@host __dropbear_win_probe__
+```sh
+ssh ssh-user@windows-host
+ssh ssh-user@windows-host whoami
 ```
 
-`__dropbear_win_guide__` 返回带 frontmatter 的版本化 Markdown，作用类似随服务器提供的
-远程 `SKILL.md`：说明认证名与 Windows 令牌的区别、当前有效身份和 Session、命令执行
-规则、桌面启动边界及安全注意事项。指南嵌入 EXE，与服务版本一同更新。登录 Banner
-会公布该入口，但普通 SSH 协议不会强制客户端自动读取；Agent 或连接包装器应在规划
-Windows 工作前主动执行它。
+默认监听 `0.0.0.0:22`。指定其他端口时，服务端使用 `-p 22222`，客户端使用
+`ssh -p 22222 ssh-user@windows-host`。若只需本机访问，可用
+`-p 127.0.0.1:22222`。便携版按 Ctrl+C 停止。
 
-完整 Skill、MCP 桥接源码、截图/分辨率脚本和说明随构造内嵌到 EXE。安装和升级时
-平铺释放到 `C:\Program Files\DropbearWin`，卸载时一起清理；绿色版启动时发布到
-EXE 旁的数据目录。`__dropbear_win_manifest__` 返回文件路径及 SHA-256，
-Agent 可据此跟踪内容变化并重新加载；特殊读取命令与 SFTP 返回相同内容。
+**启动前请核对 22 端口的占用情况。** 当 22 端口已有监听者时，Dropbear-win 会尝试
+结束占用该端口的进程并重新绑定，包括其他 SSH 服务。已有连接可能断开。其他端口
+冲突时直接报错。
 
-`__dropbear_win_probe__` 返回版本化 JSON，包含 `os=windows`、`shell`、`pty=false`、
-`transport=pipes`、`exec_encoding=raw`、`sftp=true`、`exec_subsystem=dropbear-exec-v1`，
-以及 SSH 认证名、真实 Windows 身份、访问令牌、Session ID、默认端口、指南命令和
-桌面启动能力。探测不输出 MOTD。
-`pty=false` 表示没有真正的控制台终端，当前管道模式不实现完整的窗口缩放和终端
-控制序列。自动化任务优先使用无 PTY exec。
+## 安装、升级与卸载
 
-需要由 Agent 工具自动发现和调用时，使用客户端 stdio MCP 服务
-`tools/dropbear_mcp.py` 与 `skills/dropbear-win/SKILL.md`。它提供上下文、指南、Session
-查询、Shell 命令和结构化执行工具，以及指南资源和引导提示词。
-安装、认证环境和客户端配置见 [Skill 与 MCP 集成](docs/agent-mcp.md)。
+| 项目 | 便携运行 | 内置安装 |
+| --- | --- | --- |
+| 程序 | 手动启动的 EXE | `C:\Program Files\DropbearWin\dropbear-win-x64.exe`（x86 使用对应文件） |
+| 数据 | EXE 旁的 `dropbear-win-data\` | `%ProgramData%\DropbearWin\` |
+| 启动 | 从控制台启动 | `DropbearWin` 服务随系统启动 |
+| 命令身份 | 启动 EXE 的 Windows 身份 | 默认 `NT AUTHORITY\SYSTEM` |
 
-每个命令拥有独立环境块，包含 `USER`、`LOGNAME`、`HOME`、`SHELL`、`TERM`、
-`SSH_CLIENT`、`SSH_CONNECTION`。HOME 与默认工作目录为服务启动目录。每个 exec 是
-新进程，上一次 exec 的 `cd` 或变量赋值不延续到下一次。
+表中的安装路径以系统盘为 C 盘的常见配置为例。数据目录保存 `account.conf`、
+`hostkey_ed25519` 和运行文件。服务日志在数据目录的 `service.log`。
 
-无 PTY 命令与结构化执行入口保留 stdout/stderr 原始字节，不承诺外部工具统一输出
-UTF-8。CMD 交互会话保留原有 OEM 转码；PowerShell 后端保留原始字节，避免按 OEM
-误解码。PowerShell 文本脚本可显式设置 `[Console]::OutputEncoding`；二进制数据使用
-原始流或 SFTP。
+**安装。** 在便携 EXE 的真实控制台中确认 `[y/N]` 后，安装器复制 EXE、迁移账号及主机
+密钥、展开内嵌 Skill/MCP 文件，并注册和启动自动服务。安装器退出后，辅助进程自动
+清理原 EXE 和相邻数据目录中的程序文件。若无法启动清理辅助进程，程序会尝试安排
+原 EXE 在下次重启时删除，并报告结果。安装目录包含配套卸载脚本。
 
-### 避免多层转义：原生程序执行
+已有服务指向桌面上的便携 EXE，或指向缺少安装标记的当前 EXE 时，程序仍会询问
+是否迁移安装。服务指向当前系统盘安装副本且安装标记存在时，启动该副本会跳过
+安装询问。安装提示需要控制台输入，服务模式和重定向 stdin 的启动方式会跳过提示。
 
-本机客户端 `tools/windows_exec.py` 从 JSON 文件读取请求，通过 SSH subsystem
-直接传递程序、参数数组、工作目录和环境变量。远端只需本项目 EXE；Python 和
-OpenSSH 仅需安装在调用端，登录密码由 OpenSSH 交互读取。
+**升级。** 从安装目录之外启动新版 EXE，按提示确认升级。升级会替换已安装程序与服务
+配置，并保留原 SSH 账号和主机密钥。若已有同名服务指向其他程序，交互安装会先提示
+替换，确认后停止该服务并更新配置。安装启动失败时，可从控制台的 Windows 错误码
+和服务日志排查。
 
-例如 `task.json`（程序路径请填写目标 Windows 上的实际路径）：
-
-```json
-{
-  "program": "C:\\Tools\\Python\\python.exe",
-  "args": ["C:\\Work\\inspect.py", "argument with spaces", "literal&value", "中文", ""],
-  "cwd": "C:\\Work",
-  "env": {"TASK_MODE": "test"}
-}
-```
-
-```text
-python tools/windows_exec.py --request task.json --port 22 user@host
-python tools/windows_exec.py --request task.json --input input.bin user@host
-```
-
-stdout/stderr 分开返回，退出码通过 SSH exit-status 返回。`program` 应为原生 EXE；
-参数按 Microsoft CRT 引号规则编码。自行解析原始命令行的程序（尤其 CMD）仍有自己
-的语法；执行 `.cmd`、`.ps1` 请显式调用对应解释器。入口不自动猜测 shell，未实现
-持久工作目录或完整伪终端。每个命令使用独立 Windows Job 管理进程树；命令结束、
-客户端关闭 channel、连接断开或服务停止时，会回收该命令的子孙进程。不要通过
-SSH 命令把后台进程留驻；需要独立常驻的程序应注册为单独的 Windows 服务。
-
-控制工具默认把 program、cwd、环境变量和参数分别编码为 UTF-8，再转成 Base64；
-服务端逐字段解码后调用 Windows 原生进程接口。这一层由两端自动处理，JSON 请求
-保持原来的写法。普通 `ssh host "命令"` 仍按 shell 语法执行；调用端在交给工具之前
-已经丢失的引号或字符，需要从调用端修正。
-
-SSH 子系统名称继续使用 `dropbear-exec-v1`，新请求魔数为四字节 `DBX2`；接着是
-program、cwd 字符串、环境变量数量及 name/value 对、参数数量及参数字符串。
-数字均为大端 uint32，字符串为“大端 uint32 Base64 字节长度 + Base64 内容”。
-只接受标准 Base64 字母表和规范的 `=` 填充，不接受空白、非法 UTF-8 或解码后的 NUL。
-完整头部（含魔数、长度、计数和编码内容）最多 1 MiB；环境变量最多 256 个、参数
-最多 4096 个，仍受 Windows 32767 字符命令行限制。解析或启动失败返回 125。
-
-头部之后的字节直接作为程序 stdin，stdout/stderr 也保持原始字节，不进行 Base64
-转换；客户端通过无 PTY 的 SSH 二进制通道发送，EOF 表示输入结束。Base64 是字段
-编码，传输加密由 SSH 提供。服务端继续接受旧 `DBX1` 的原始 UTF-8 字段；连接旧版
-服务端时可以给控制工具加 `--protocol 1`。探测结果中的 `exec_protocols: [1,2]` 和
-`exec_protocol_default: 2` 声明支持版本，`control_encoding: "base64"` 声明默认编码。
-
-调试时设置 `DROPBEAR_WIN_TRACE_EXEC=1`，服务端 stderr 会记录收到的 exec 字节长度
-和转义内容。日志可能包含命令参数；用完删除该环境变量即可关闭。
-
-### Windows 回归测试
-
-`tests/windows_native.py` 使用一次性账号和 loopback 服务，覆盖 CMD/PowerShell、
-探测、会话环境、参数转义、Unicode、二进制 stdin、stderr、退出码及 SFTP。
-在 Windows 测试机上安装 Paramiko 后执行：
-
-```text
-python tests/windows_native.py dist/dropbear-win-x64.exe
-python tests/windows_native.py dist/dropbear-win-x86.exe
-python tests/windows_protocol.py dist/dropbear-win-x64.exe
-python tests/windows_protocol.py dist/dropbear-win-x86.exe
-python tests/windows_flood.py dist/dropbear-win-x64.exe
-python tests/windows_flood.py dist/dropbear-win-x86.exe
-python tests/windows_lifecycle.py dist/dropbear-win-x64.exe
-python tests/windows_lifecycle.py dist/dropbear-win-x86.exe
-python tests/windows_kdf.py dist/dropbear-win-x64.exe
-python tests/windows_kdf.py dist/dropbear-win-x86.exe
-```
-
-协议测试覆盖新旧帧、非法 Base64/UTF-8/NUL、截断、长度及计数上限；原生回归还验证
-SSH 分片发送、特殊字符逐项还原、二进制输入哈希以及坏请求之后连接仍可继续使用。
-
-口令测试用 `hashlib` 生成的哈希反向验证服务端派生结果，覆盖 10000/100000/200000
-迭代数、长口令和非 ASCII 口令，并测量 30 路未认证连接洪泛下的服务端 CPU 占用
-（需要 `psutil`）。`tests/windows_flood.py` 验证预认证槽位上限、拒绝风暴 CPU
-上界、预认证宽限超时回收与令牌桶排队（需要 `psutil`）：
-
-生命周期测试覆盖启动参数继承、keepalive/idle timeout、认证前连接数限制、认证后
-名额释放，以及 channel/连接/监听进程退出时的任务树回收。管理员终端追加
-`--service` 会创建随机名称的一次性 SCM 服务，验证启动、停止、重启及启动失败，
-结束后删除测试服务。测试账号、密钥和监听端口均独立于部署数据。
-
-`tests/windows_stress.py` 提供有界的本机压力测试，Windows 测试机还需安装 `psutil`。
-依次使用 4/12/24 个已认证连接，测试连续命令、交互欢迎页、24 路 1 MiB SFTP
-上传下载、100 次登录断连和认证前限流；JSON 报告记录延迟、错误、进程树内存及
-句柄峰值、空闲后的监听进程状态和观察到的残留进程。它不是长时间稳定性测试。
-
-```text
-python tests/windows_stress.py dist/dropbear-win-x64.exe build/stress-x64.json
-python tests/windows_stress.py dist/dropbear-win-x86.exe build/stress-x86.json
-```
-
-`tests/windows_usability.py EXE --service` 覆盖首次配置、重复/并发启动、22
-接管、权限失败、IPv6、真实控制台退出和日志、坏配置、带空格/中文路径及服务和
-控制台互相接管。需要管理员权限运行完整服务测试；开始前要求本机 22 没有
-现有监听，仅接管测试自己创建的进程。测试结果矩阵见
-[使用性排查记录](docs/usability-audit.md)。
-
-## Windows 服务值守
-
-### 从 SSH 启动桌面程序
-
-服务及普通 SSH 命令仍以 LocalSystem 在 Windows 会话 0 运行。需要把 GUI 显示到
-当前已登录的物理控制台桌面时，在 SSH 的 CMD 中使用专用命令：
-
-```cmd
-"C:\Program Files\DropbearWin\dropbear-win-x64.exe" --desktop-launch "C:\Windows\System32\notepad.exe"
-rem 指定已登录的 RDP 会话，并校验该会话属于 agent：
-"C:\Program Files\DropbearWin\dropbear-win-x64.exe" --desktop-launch --session 3 --expect-user agent "C:\Windows\System32\notepad.exe"
-```
-
-可在程序路径后追加参数。程序路径必须是带盘符的绝对 EXE 路径。启动的桌面程序使用
-所选登录用户的 Windows 令牌和环境，独立于 SSH 会话；SSH 断开后程序仍会运行。
-它不会继承 SSH 服务的 SYSTEM 权限。没有用户登录物理控制台时命令明确失败。
-此功能需要 Windows Vista / Server 2008 或更新版本；在 XP / Server 2003 上，
-普通 SSH 与服务仍可使用。普通 SSH 命令继续保留原有 SYSTEM 权限和会话 0 行为。
-`--session ID` 可选择已有 Active/Connected 的控制台或 RDP 会话；Session 0、无登录用户
-或 `--expect-user` 身份不符会拒绝启动。用户名可为 `agent` 或 `DOMAIN\agent`。
-不指定 Session 时仍选择物理控制台。它不创建新登录、不解锁桌面；锁屏、断开连接、
-UAC 和应用初始化仍可能影响 UI 自动化，启动返回 PID 不等于应用已就绪。
-
-MCP 提供 `dropbear_desktop_launch` 和 `dropbear_session_screenshot`。
-还可用 `dropbear_session_list` 结构化发现登录用户和 SID，按 Session 或用户名使用
-`dropbear_session_exec` 执行命令、`dropbear_session_ui` 聚焦/点击/输入，或通过
-`dropbear_session_worker_start/call/stop` 在该用户桌面中持续接收操作。
-worker 使用该用户的真实令牌和配置，经 SSH/SFTP 收发请求；命令与脚本
-可在这里执行，普通 SSH 的 SYSTEM 命令接口继续保留。完整例子见下方集成文档。
-例如截图参数 `session_id=3, expected_user="agent"`，返回 PNG 图片及实际用户、会话和
-屏幕尺寸。截图使用该用户桌面的短时进程，经 SFTP 取回后清理临时文件，详见
-[Skill 与 MCP 集成](docs/agent-mcp.md)。
-`dropbear_session_display` 查询当前显示模式；`dropbear_session_set_resolution` 支持
-指定会话、分辨率、显示设备、刷新率和只测试模式。修改后核验实际值；RDP 驱动忽略
-请求时明确返回需要客户端调整，不将 API 成功码当成分辨率已改变。
-
-### 开机自动启动
-
-可从任意临时目录运行：
+脚本部署可显式请求安装，后面可带服务器参数。此方式直接进入安装流程。缺少账号
+配置时仍需输入账号和密码。
 
 ```powershell
 .\dropbear-win-x64.exe --install-autostart
-# 默认端口是 22；仅改用其他端口时追加：-p 22222
+sc.exe query DropbearWin
+sc.exe qc DropbearWin
 ```
 
-32 位 Windows 改用 `dropbear-win-x86.exe`。首次运行会申请管理员权限并设置本项目的
-SSH 账号，然后将 EXE 复制到系统盘的 `Program Files\DropbearWin`，账号与主机密钥
-迁移到 `%ProgramData%\DropbearWin`，注册自动启动服务 `DropbearWin` 指向安装副本。
-复制及注册成功后清理原 EXE 旁的便携数据；仍被当前进程使用的原 EXE 会安排在下次
-重启时删除。若服务已存在，先停止服务再重新安装；目标位置已有不同账号或主机密钥
-时安装会中止并保留两份数据。安装完成后会立即启动新服务；可运行
-`sc query DropbearWin` 检查运行状态，用 `sc qc DropbearWin` 核对 `AUTO_START`。
+服务正常启动后，`query` 应显示 `RUNNING`，`qc` 应显示 `AUTO_START`，并指向
+系统盘安装副本。自定义 SCM 注册方式及 `--service` 用法见
+[手动注册服务](docs/windows-service.md#手动注册--service)。
 
-Windows 不会永久记住一次 UAC 同意：以后手动启动 EXE 时仍可能提示；开机时由 SCM
-直接启动已注册的服务。默认服务以 LocalSystem 身份运行，SSH 登录后的命令和文件
-传输继承该身份。SSH 登录 Banner 会把 Dropbear 认证名与 Windows 实际身份分开显示，
-并标明访问令牌和 Windows Session ID；普通 SSH 命令以 Banner 中的 Windows 身份运行。
-Banner 还会给出 `--desktop-launch --session ID --expect-user USER` 示例；新 GUI
-改用所选会话用户的主令牌和环境，不再保留 SSH 的 SYSTEM 令牌。
-卸载请在目标机本地运行安装目录中的
-`uninstall-dropbear-service.cmd`，或执行安装 EXE 的 `--uninstall`；默认保留账号
-和主机密钥，附加 `--purge-data` 才会删除安装数据。
-Skill、MCP 桥接和截图/分辨率辅助脚本也在安装时从 EXE 自动释放到安装目录，
-升级时刷新、失败时回退，卸载时按内嵌文件清单删除。安装目录中的其他文件保留。
-包内 `agent-mcp.md` 提供连接端配置方法；Python 和 MCP 依赖仍在连接端安装。
-可用 `--export-agent-files 已存在的目录` 单独导出内嵌整包，无需安装服务。
-
-直接在控制台运行 EXE(不需要任何参数)时，程序会在账号就绪后询问是否把当前
-程序注册为 Windows 服务 `DropbearWin`：回答 `y` 会执行同样的 C 盘迁移并注册
-自动启动服务，随后退出当前便携进程；安装目录生成卸载脚本
-`uninstall-dropbear-service.cmd`（停止并删除服务及程序文件；安装后的账号与主机密钥
-默认保留）。安装成功后，系统盘中的新 EXE 会等待便携进程退出，再自动删除原 EXE
-及其 `dropbear-win-data` 中的程序数据；绿色版所在目录为空时也会删除。目录中的其他
-文件不会被递归删除。
-回答其他值或直接回车则跳过，继续以绿色版控制台方式运行。只有服务指向当前
-系统盘安装副本、且安装标记有效时，后续启动才不再重复询问。服务仍指向桌面或其他
-便携位置的当前 EXE 时，会提示迁移安装并等待 `[y/N]`；缺少安装标记也会重新确认。
-若服务指向带安装标记的
-系统盘旧版，绿色版会明确提示继续安装将替换旧程序和服务配置，同时保留已安装的
-SSH 账号与主机密钥。若同名服务指向其他程序，确认后会停止该服务并用当前版本
-替换其服务配置。安装或替换完成后会立即启动新服务；若启动失败，自动启动配置
-仍会保留并显示 Windows 错误码。
-
-注册与卸载脚本要求管理员权限；权限不足时报告 Windows 错误并继续控制台运行。
-从管道或重定向文件读取 stdin 时不会出现询问，自动化脚本不受影响。
-
-脚本化部署仍可使用 `--service 服务名` 接入 Windows SCM，后面继续接受 `-p`、
-`-K`、`-I`、`-j`、`-k` 等 Dropbear 参数。部署、启动及删除命令见
-[Windows 服务说明](docs/windows-service.md)。先交互运行完成账号配置，再注册服务；
-服务模式缺少账号配置时会快速报错退出。服务只在监听成功后报告 RUNNING。
-
-监听进程向每个连接子进程传递完整启动参数。认证前默认每个来源地址最多 5 个、
-全局最多 5 个未认证连接进程（见[连接限制与泛洪防护](#连接限制与泛洪防护)）；
-认证成功或连接退出后槽位立即复用。监听进程登记连接进程，连接进程监视监听
-进程存活状态，并用每命令一个 Job 回收任务树，避免采用 XP/Server 2003 不支持的
-嵌套 Job。正常停止与监听进程意外退出均覆盖这一回收路径。
-
-## SCP 文件传输
-
-两个架构的 EXE 都内置文件传输服务，不要求目标机安装 `scp.exe`、
-`sftp-server.exe`、PowerShell、MSYS2 或 Cygwin。新版 OpenSSH 的 `scp` 默认通过
-内置 SFTP v3 传输；使用 `scp -O` 时由同一个 EXE 处理传统 SCP 协议。两个模式都
-继承启动服务进程的 Windows 访问令牌，并保持二进制原始字节流，不经过终端编码转换。
+**卸载。** 在目标机的本地管理员终端运行安装目录中的 `uninstall-dropbear-service.cmd`，
+或从同一目录运行以下命令之一。
 
 ```powershell
-# 上传（新版 OpenSSH 默认模式）
-scp -P 22 .\local.bin user@192.168.1.10:C:/Temp/remote.bin
+# 卸载服务、程序和内嵌资源，保留账号、主机密钥及日志
+.\dropbear-win-x64.exe --uninstall
 
-# 下载
-scp -P 22 user@192.168.1.10:C:/Temp/remote.bin .\local.bin
-
-# 递归传输目录
-scp -r -P 22 .\folder user@192.168.1.10:C:/Temp/
-
-# 强制使用传统 SCP 协议
-scp -O -P 22 .\local.bin user@192.168.1.10:C:/Temp/remote.bin
+# 同时删除已安装的账号、主机密钥和日志
+.\dropbear-win-x64.exe --uninstall --purge-data
 ```
 
-远端 Windows 路径建议使用正斜杠，例如 `C:/Temp/file.bin`。包含空格或中文的路径
-优先使用新版默认模式；传统 `scp -O` 仍受客户端远端 shell 引用规则影响。
+卸载可能提示重启以完成在用文件的删除。默认卸载后，从一份没有相邻账号配置的新 EXE
+执行 `--install-autostart`，可复用保留下来的账号和主机密钥。
 
-绿色版运行时，账户、ED25519 主机密钥和 PID 文件保存在 EXE 旁的
-`dropbear-win-data`；内置安装完成后改用 `%ProgramData%\DropbearWin`。
-停止服务并删除当前数据目录中的 `account.conf`，下次启动时会重新进入账户设置。
+## SSH 身份与文件传输
 
-每次启动都会先执行 RFC 8032 ED25519 已知向量自检，再验证主机密钥是否可解析，
-以及私钥与公钥是否确实匹配。若升级前的旧版本曾留下损坏或无法正确签名的主机
-密钥，程序会直接删除坏密钥，不创建 `.invalid` 备份；随后保留 `account.conf` 并
-自动生成新密钥。客户端看到主机密钥发生变化时，需要删除对应的旧 `known_hosts`
-记录后重新确认新指纹。
+SSH 用户名和密码由 Dropbear-win 单独管理。登录后，命令和文件操作继承服务端当前
+Windows 令牌。默认安装服务以 **LocalSystem、Session 0** 运行，凭有效 SSH 口令即可
+取得该 Windows 身份的访问权限。登录信息和 `__dropbear_win_probe__` 分别显示 SSH
+认证名、实际 Windows 用户、令牌与会话。口令以带盐的 PBKDF2-HMAC-SHA256 保存，
+本构建仅支持口令登录，主机密钥使用 ED25519。
+
+```sh
+sftp ssh-user@windows-host
+scp local.bin ssh-user@windows-host:C:/Temp/remote.bin
+scp ssh-user@windows-host:C:/Temp/remote.bin local.bin
+scp -O local.bin ssh-user@windows-host:C:/Temp/remote.bin
+```
+
+现代 OpenSSH 的 `scp` 默认使用内嵌的 SFTP v3 服务，`scp -O` 使用内嵌传统 SCP。
+Windows 路径可写成 `C:/Temp/remote.bin`。含空格或中文的路径优先通过 SFTP 传输。
+
+交互 Shell 默认使用 `cmd.exe`，终端管道在 UTF-8 和系统 OEM 代码页之间转码。通过
+`DROPBEAR_WIN_SHELL=powershell` 可选择已安装的 Windows PowerShell。无 PTY 的命令
+保留原始 stdout/stderr。每次远程执行拥有自己的工作目录和环境，前一次的 `cd` 与
+环境变量赋值不会延续。
+
+## Agent、Skill 与 MCP
+
+### 通过 SSH 发现能力
+
+SSH 协议标识包含 `skill-mcp=__dropbear_win_manifest__`，认证 Banner 也会提示发现命令。
+认证后可用普通 SSH 客户端读取。
+
+```sh
+ssh ssh-user@windows-host __dropbear_win_manifest__
+ssh ssh-user@windows-host __dropbear_win_probe__
+ssh ssh-user@windows-host __dropbear_win_guide__
+ssh ssh-user@windows-host __dropbear_win_skill__
+ssh ssh-user@windows-host __dropbear_win_mcp__
+```
+
+Agent 或连接包装器可跟随发现命令读取清单，按 SHA-256 核对 Skill/MCP 内容，再用
+探测结果确认实时 Windows 身份、Shell 与 Session。普通 SSH 客户端是否自动跟随发现
+入口取决于客户端实现。
+
+EXE 内嵌 `SKILL.md`、`mcp.json`、MCP 桥接源码和会话辅助脚本。安装时平铺到安装
+目录，便携启动时释放到 `dropbear-win-data`。连接端可通过清单和 SFTP 下载整包，
+或在 Windows 上用 `--export-agent-files C:\existing-folder` 导出到已有目录。
+
+### 配置连接端 MCP
+
+MCP 是在连接端运行的 Python stdio 桥接器，通过现有 SSH 端口通信。从仓库启动时，
+先在连接端准备 Python 3.10 或更新版本。
+
+```sh
+python3 -m venv build/mcp-venv
+build/mcp-venv/bin/python -m pip install -r tools/requirements-mcp.txt
+```
+
+在 MCP 客户端配置中将命令设为虚拟环境 Python 的绝对路径，参数设为
+`tools/dropbear_mcp.py` 的绝对路径。通过客户端环境传入
+`DROPBEAR_MCP_HOST`、`DROPBEAR_MCP_USER`、`DROPBEAR_MCP_PASSWORD`，
+可选 `DROPBEAR_MCP_PORT`（默认 22）和 `DROPBEAR_MCP_ENCODING`。
+桥接器按连接端 `known_hosts` 校验主机密钥。完整配置和下载包用法见
+[Skill 与 MCP 集成](docs/agent-mcp.md)。
+
+### 命令与桌面会话
+
+| 任务 | MCP 接口 |
+| --- | --- |
+| 读取发现清单、实时身份与指南 | `dropbear_manifest`、`dropbear_context`、`dropbear_guide` |
+| 按当前 SSH 身份执行命令 | `dropbear_run_command`、`dropbear_exec` |
+| 查找已登录的控制台或 RDP 会话 | `dropbear_session_list` |
+| 在所选用户桌面启动独立程序 | `dropbear_desktop_launch` |
+| 以所选用户身份执行并收集结果 | `dropbear_session_exec` |
+| 列出窗口、聚焦、点击、输入文字及快捷键 | `dropbear_session_ui` |
+| 截取所选会话的整个虚拟桌面（含所有显示器） | `dropbear_session_screenshot` |
+| 查询显示模式、测试或应用分辨率 | `dropbear_session_display`、`dropbear_session_set_resolution` |
+| 在同一用户会话连续执行多步任务 | `dropbear_session_worker_start/call/stop` |
+
+桌面操作使用所选登录用户的令牌和环境。先枚举会话，再用 Session ID、用户名或两者
+共同选定目标。用户有多个可用会话时用 ID 消除歧义。桌面启动针对已有登录，截图和
+窗口输入需要可用的桌面。UI 操作先列出窗口，再用返回的 `window_id` 指定目标。
+分辨率工具会核验实际结果，RDP 驱动要求客户端调整时会返回对应状态。
+
+从已安装服务的 SSH CMD 中也可直接启动桌面应用。将会话编号和用户名替换为
+`query session` 查到的目标。
+
+```cmd
+"C:\Program Files\DropbearWin\dropbear-win-x64.exe" --desktop-launch --session 3 --expect-user desktop-user "C:\Windows\System32\notepad.exe"
+```
+
+普通命令可用 `tools/windows_exec.py` 通过原生子系统传递 EXE、参数数组、工作目录
+和环境，适合含空格、Unicode 或 shell 特殊字符的参数。执行批处理或 PowerShell 脚本时
+显式选择对应解释器。将下面的示例请求保存为 `task.json`。
+
+```json
+{
+  "program": "C:\\Windows\\System32\\whoami.exe",
+  "args": [],
+  "cwd": "C:\\Users\\Public"
+}
+```
+
+```sh
+python3 tools/windows_exec.py --request task.json ssh-user@windows-host
+```
+
+子系统名为 `dropbear-exec-v1`，默认 DBX2 帧。支持 `--input` 传递原始 stdin，
+并返回原始 stdout/stderr 和退出码。旧 DBX1 服务可用 `--protocol 1`。普通命令的
+子进程受 Windows Job 管理，持续运行的桌面程序使用专用桌面启动接口。
+
+## 构建
+
+Linux 交叉编译需要 Bash、make、Python 3 及目标架构的 MinGW-w64 GCC/binutils。
+x64 使用 `x86_64-w64-mingw32-*`，x86 使用 `i686-w64-mingw32-*`。
+GCC 需支持 `-mcrtdll=msvcrt-os`，以链接 Windows 系统 CRT。
+
+```sh
+bash scripts/build-cross.sh --architecture all --jobs 6
+```
+
+用 `--architecture x64` 或 `--architecture x86` 单独构建，`--clean` 可重建所选架构
+的构建目录。EXE 输出到 `dist/`，`dist/build-manifest.json` 记录本次构建的文件名、
+大小与 SHA-256。Windows 本机构建可使用 MSYS2 和对应 MinGW 工具链。
+
+```powershell
+.\scripts\build-native.ps1 -Msys2Root C:\msys64 -Architecture all
+```
+
+构建会检查 PE 架构、子系统版本、管理员清单和 DLL/API 导入表。NT 5.1/5.2 是基础 SSH
+的静态兼容基线，旧系统仍需实机验证。桌面启动依赖 Vista / Server 2008 或更新系统
+的 WTS 接口，截图、分辨率和会话 worker 还需要目标机 Windows PowerShell 及相关 .NET
+组件。会话交互已在 Windows 10 / PowerShell 5.1 上验证。
+
+## 验证与排查
+
+Windows 测试机安装 Paramiko 后，可运行基础 SSH 和协议回归。MCP 客户端可在前面
+配置的虚拟环境中运行 `tests/test_mcp.py`。
+
+```powershell
+python tests/windows_native.py dist/dropbear-win-x64.exe
+python tests/windows_protocol.py dist/dropbear-win-x64.exe
+python tests/windows_lifecycle.py dist/dropbear-win-x64.exe
+```
+
+安装确认、迁移及自动清理可在专用 Wine 环境中回归，包括限制清理进程脱离 Job 的场景。
+测试会创建并删除临时 SCM 服务和安装文件，请使用没有现有 DropbearWin 安装的 Wine prefix。
+
+```sh
+WINEPREFIX="$PWD/build/wine-setup-test" python3 tests/test_setup_prompt.py \
+  dist/dropbear-win-x64.exe dist/dropbear-win-x86.exe
+```
+
+- 启动后没有监听时，先检查控制台输出、端口占用和服务状态。以 `RUNNING` 作为监听成功的依据。
+- 升级后遇到 SSH 主机指纹不符时，先通过可信渠道核对目标机的实际指纹。
+- 非交互输出出现乱码时，按远端程序的实际编码解码，MCP 的 Base64 字段保留原始字节。
+- 连接前限流默认全局 5 个、每地址最多 5 个未认证连接，认证宽限 60 秒。启动前可用
+  `DROPBEAR_WIN_MAX_UNAUTH`、`DROPBEAR_WIN_MAX_UNAUTH_PER_IP`、
+  `DROPBEAR_WIN_AUTH_TIMEOUT` 和 `DROPBEAR_WIN_CONN_RATE` 调整；口令派生并发由
+  `DROPBEAR_WIN_KDF_CONCURRENCY` 控制。测试覆盖见 [Windows 回归测试](tests/)。
+
+## 源码与许可
+
+| 目录 | 内容 |
+| --- | --- |
+| `src/windows/` | 服务安装、端口接管、日志和内嵌资源 |
+| `vendor/dropbear/` | 包含 Windows 适配的 Dropbear 源码快照和加密库 |
+| `scripts/` | Linux 交叉编译、Windows 本机构建和资源打包 |
+| `tools/`、`skills/` | SSH 结构化执行客户端、MCP 桥接与 Agent Skill |
+| `tests/`、`docs/` | 回归测试及维护说明 |
+
+维护上游源码快照时参见 [依赖边界](docs/dependencies.md)。许可与版权见
+[项目许可](LICENSE) 和 [Dropbear 及组件许可](vendor/dropbear/LICENSE)。
