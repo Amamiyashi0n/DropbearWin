@@ -11,6 +11,10 @@
 生成受 ACL 保护的临时队列目录，完成后用 `dropbear_session_worker_stop` 清理。
 会话交互使用 Windows 自带 PowerShell，已在 Windows 10/PowerShell 5.1 验证。
 
+`dropbear_run_script` 支持上传并执行长 PowerShell、Python 或 Node 脚本，使用普通 SSH
+令牌和独立 stdin。脚本临时目录由 EXE 创建并限制访问，执行后通过 `script_cleanup`
+报告清理状态，参数及清理恢复方式见 [长脚本参考](mcp-reference.md#long-scripts)。
+
 ## 从 SSH 发现及读取
 
 ```sh

@@ -81,6 +81,14 @@ the byte-preserving `dropbear-exec-v1` subsystem, avoiding shell quoting.
 Use `dropbear_run_command` when shell syntax is needed, following the live
 `shell` value (`cmd` or `powershell`, without POSIX assumptions).
 
+Use `dropbear_run_script` for long PowerShell, Python, or Node scripts. Pass
+`script` as text, `runtime`, script `args`, and an absolute interpreter `program`
+for Python/Node. It stages the file over SFTP in a private directory and uses
+structured exec with separate `stdin_base64`, `cwd`, and `env`. It uses the SSH
+Windows token and requires `script_staging=true` in the live probe. Check
+`script_cleanup.removed` and any leftover directory/error. See the
+[long-script reference](references/mcp.md#long-scripts) for limits and recovery.
+
 Each exec has independent cwd/environment. Previous `cd` and variable assignments
 do not carry over. Results include exit code, text and lossless base64 streams.
 Select the actual output encoding when decoding Windows utilities (often CP936

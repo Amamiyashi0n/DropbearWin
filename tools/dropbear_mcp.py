@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import json
 import hashlib
 import os
+import ntpath
 import socket
 import struct
 import time
@@ -18,7 +19,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ImageContent, TextContent
 
 from windows_exec import encode_request
-from session_client import SessionRemote
+from session_client import SessionRemote, validate_work
 
 
 @dataclass(frozen=True)
@@ -75,54 +76,136 @@ class Remote(SessionRemote):
             raise ValueError("timeout must be greater than 0 and at most 300 seconds")
         client = self.connect()
         try:
-            channel = client.get_transport().open_session(timeout=10)
-            try:
-                channel.settimeout(10)
-                if command is None:
-                    channel.invoke_subsystem("dropbear-exec-v1")
-                else:
-                    channel.exec_command(command)
-                channel.settimeout(0.1)
-                out, err = bytearray(), bytearray()
-                sent = 0
-                write_closed = False
-                deadline = time.monotonic() + timeout
-                while True:
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError("SSH command timed out; its channel was closed")
-                    if sent < len(payload) and channel.send_ready():
-                        try:
-                            sent += channel.send(payload[sent:sent + 32768])
-                        except socket.timeout:
-                            pass
-                    if sent == len(payload) and not write_closed:
-                        channel.shutdown_write()
-                        write_closed = True
-                    if channel.recv_ready():
-                        out.extend(channel.recv(32768))
-                    if channel.recv_stderr_ready():
-                        err.extend(channel.recv_stderr(32768))
-                    if len(out) + len(err) > self.settings.max_output:
-                        raise ValueError("Remote output exceeded 1 MiB; use a remote file instead")
-                    if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
-                        status = channel.recv_exit_status()
-                        if status < 0:
-                            raise RuntimeError("SSH closed without an exit status; command outcome is unknown")
-                        return bytes(out), bytes(err), status
-                    time.sleep(0.005)
-            finally:
-                channel.close()
+            return self._exchange(client, command, payload, timeout)
         finally:
             client.close()
 
-    def probe(self) -> dict:
-        out, err, status = self.exchange("__dropbear_win_probe__")
+    def _exchange(self, client, command=None, payload=b"", timeout=30):
+        """Use an existing authenticated connection for one bounded SSH channel."""
+        channel = client.get_transport().open_session(timeout=10)
+        try:
+            channel.settimeout(10)
+            if command is None:
+                channel.invoke_subsystem("dropbear-exec-v1")
+            else:
+                channel.exec_command(command)
+            channel.settimeout(0.1)
+            out, err = bytearray(), bytearray()
+            sent = 0
+            write_closed = False
+            deadline = time.monotonic() + timeout
+            while True:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("SSH command timed out; its channel was closed")
+                if sent < len(payload) and channel.send_ready():
+                    try:
+                        sent += channel.send(payload[sent:sent + 32768])
+                    except socket.timeout:
+                        pass
+                if sent == len(payload) and not write_closed:
+                    channel.shutdown_write()
+                    write_closed = True
+                if channel.recv_ready():
+                    out.extend(channel.recv(32768))
+                if channel.recv_stderr_ready():
+                    err.extend(channel.recv_stderr(32768))
+                if len(out) + len(err) > self.settings.max_output:
+                    raise ValueError("Remote output exceeded 1 MiB; use a remote file instead")
+                if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
+                    status = channel.recv_exit_status()
+                    if status < 0:
+                        raise RuntimeError("SSH closed without an exit status; command outcome is unknown")
+                    return bytes(out), bytes(err), status
+                time.sleep(0.005)
+        finally:
+            channel.close()
+
+    def probe(self, connection=None) -> dict:
+        response = (self.exchange("__dropbear_win_probe__") if connection is None
+                    else self._exchange(connection, "__dropbear_win_probe__"))
+        out, err, status = response
         if status:
             raise RuntimeError("DropbearWin probe failed: " + err.decode("utf-8", "replace"))
         result = json.loads(out)
         if result.get("os") != "windows" or result.get("version", 0) < 2:
             raise RuntimeError("This bridge requires the DropbearWin v2 agent probe")
         result["ssh_auth_banner"] = self.last_auth_banner
+        return result
+
+    def run_script(self, script: str, runtime: str = "powershell", program: str | None = None,
+                   args: list[str] | None = None, cwd: str = "", env: dict[str, str] | None = None,
+                   stdin_base64: str = "", timeout: float = 30, encoding: str | None = None) -> dict:
+        extensions = {"powershell": ".ps1", "python": ".py", "node": ".js"}
+        if runtime not in extensions:
+            raise ValueError("runtime must be powershell, python, or node")
+        if not isinstance(script, str) or not script or "\0" in script:
+            raise ValueError("script must be nonempty text without NUL")
+        source = script.encode("utf-8-sig" if runtime == "powershell" else "utf-8")
+        if len(source) > 1024 * 1024:
+            raise ValueError("script is limited to 1 MiB; upload larger files separately")
+        if runtime != "powershell" and not program:
+            raise ValueError("Provide the absolute interpreter program for python or node")
+        request = validate_work("exec", {
+            "program": program or r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            "args": args or [], "cwd": cwd, "env": env or {}, "stdin_base64": stdin_base64}, timeout)
+        codec = encoding or self.settings.encoding
+        codecs.lookup(codec)
+        data = base64.b64decode(stdin_base64, validate=True)
+        stage_id = uuid.uuid4().hex
+        directory = None
+        staged = False
+        staging_requested = False
+        result = None
+        failure = None
+        cleanup = {"stage_id": stage_id, "removed": False}
+        client = self.connect()
+        try:
+            context = self.probe(connection=client)
+            if not context.get("script_staging") or not context.get("server_executable"):
+                raise RuntimeError("Upgrade the remote EXE to support private script staging")
+            executable = context["server_executable"]
+            staging_requested = True
+            out, err, status = self._exchange(client, payload=encode_request({
+                "program": executable, "args": ["--script-stage", stage_id]}))
+            staging_requested = False
+            if status:
+                raise RuntimeError("Script staging failed: " + err.decode("utf-8", "replace"))
+            staged = True
+            stage = json.loads(out)
+            directory = stage["directory"]
+            filename = ntpath.join(directory, "script" + extensions[runtime])
+            with client.open_sftp() as sftp:
+                sftp.get_channel().settimeout(15)
+                with sftp.file(filename.replace("\\", "/"), "wx") as stream:
+                    stream.write(source)
+            arguments = [filename] + request["args"]
+            if runtime == "powershell":
+                arguments = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"] + arguments
+            payload = encode_request({"program": program or stage["powershell"], "args": arguments,
+                                      "cwd": cwd, "env": request["env"]}) + data
+            result = self.result(self._exchange(client, payload=payload, timeout=timeout), context, codec)
+        except Exception as exc:
+            failure = exc
+        finally:
+            if staged:
+                cleanup["directory"] = directory
+                try:
+                    _, err, status = self._exchange(client, payload=encode_request({
+                        "program": executable, "args": ["--script-cleanup", stage_id]}), timeout=15)
+                    cleanup["removed"] = status == 0
+                    if status:
+                        cleanup["error"] = err.decode("utf-8", "replace")
+                except Exception as exc:
+                    cleanup["error"] = str(exc)
+            client.close()
+        if failure is not None:
+            message = str(failure)
+            if staged and not cleanup["removed"]:
+                message += "; script_cleanup=" + json.dumps(cleanup)
+            elif staging_requested:
+                message += "; staging outcome unknown; stage_id=" + stage_id
+            raise RuntimeError(message) from failure
+        result["script_cleanup"] = cleanup
         return result
 
     def session_screenshot(self, session_id: int, expected_user: str | None = None) -> tuple[bytes, dict]:
@@ -351,6 +434,21 @@ def create_server(remote: Remote) -> FastMCP:
         payload = encode_request({"program": program, "args": args or [],
                                   "cwd": cwd, "env": env or {}}) + data
         return remote.result(remote.exchange(payload=payload, timeout=timeout), context, encoding)
+
+    @server.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+    def dropbear_run_script(script: str, runtime: str = "powershell", program: str | None = None,
+                            args: list[str] | None = None, cwd: str = "",
+                            env: dict[str, str] | None = None, stdin_base64: str = "",
+                            timeout: float = 30, encoding: str | None = None) -> dict:
+        """Upload a long script into a private directory, execute it, then clean up.
+
+        runtime is powershell, python, or node; python/node need an absolute program.
+        Script content travels over SFTP; args, cwd, env and separate binary stdin
+        use DBX2. Execution uses the SSH Windows token/session. Script limit 1 MiB,
+        stdin 256 KiB, output 1 MiB, timeout 300 seconds. script_cleanup reports
+        removal or leftover directory/error. Commands are never automatically retried.
+        """
+        return remote.run_script(script, runtime, program, args, cwd, env, stdin_base64, timeout, encoding)
 
     @server.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
     def dropbear_desktop_launch(program: str, args: list[str] | None = None,

@@ -71,6 +71,7 @@ stdio 无法交互询问密码。不要把真实密码提交到仓库。
 | Tool | `dropbear_sessions` | 查询 Windows Session，返回原始字节和解码文本 |
 | Tool | `dropbear_run_command` | 按当前 CMD/PowerShell 语法执行命令 |
 | Tool | `dropbear_exec` | 通过 DBX2 执行 EXE、参数数组、cwd、环境及二进制 stdin |
+| Tool | `dropbear_run_script` | 上传长脚本、通过 DBX2 运行解释器并清理临时文件，stdin 独立传递 |
 | Tool | `dropbear_desktop_launch` | 在指定的已登录控制台/RDP 会话启动独立程序，可核验用户名 |
 | Tool | `dropbear_session_screenshot` | 返回指定 Session 的 PNG 图片及真实用户、Session、尺寸 |
 | Tool | `dropbear_session_display` | 查询指定会话的显示设备、当前分辨率和驱动公布的模式 |
@@ -231,6 +232,15 @@ dropbear_session_set_resolution(session_id=3, expected_user="agent", width=1920,
 RDP 驱动可能返回成功但忽略修改，工具会返回 `status=client_resize_required`，此时需
 在 RDP 客户端动态调整窗口或用目标分辨率重连。该工具不替用户断开或重建 RDP 会话。
 临时结果经 SFTP 读取后删除。
+
+## 长脚本
+
+长脚本可通过 `dropbear_run_script` 传入 `script` 文本。`runtime` 支持 `powershell`、
+`python` 和 `node`，后两者需用 `program` 指定目标机解释器的绝对路径。接口在私有
+临时目录内上传文件，再通过原生结构化执行传入参数、cwd、环境和独立的二进制 stdin。
+脚本使用普通 SSH 身份和 Session。执行后检查 `script_cleanup.removed`，清理错误会
+附带目录及 staging ID，详细参数与恢复方式见
+[长脚本参考](../skills/dropbear-win/references/mcp.md#long-scripts)。
 
 ## 验证
 

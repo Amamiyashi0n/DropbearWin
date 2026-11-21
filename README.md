@@ -192,6 +192,7 @@ build/mcp-venv/bin/python -m pip install -r tools/requirements-mcp.txt
 | --- | --- |
 | 读取发现清单、实时身份与指南 | `dropbear_manifest`、`dropbear_context`、`dropbear_guide` |
 | 按当前 SSH 身份执行命令 | `dropbear_run_command`、`dropbear_exec` |
+| 上传并执行长脚本、独立传递 stdin、清理临时文件 | `dropbear_run_script` |
 | 查找已登录的控制台或 RDP 会话 | `dropbear_session_list` |
 | 在所选用户桌面启动独立程序 | `dropbear_desktop_launch` |
 | 以所选用户身份执行并收集结果 | `dropbear_session_exec` |
@@ -232,6 +233,13 @@ python3 tools/windows_exec.py --request task.json ssh-user@windows-host
 并返回原始 stdout/stderr 和退出码。旧 DBX1 服务可用 `--protocol 1`。普通命令的
 子进程受 Windows Job 管理，持续运行的桌面程序使用专用桌面启动接口。
 
+长脚本可用 `dropbear_run_script(script=..., runtime="powershell")`。Python 和 Node
+脚本分别使用 `runtime="python"` 或 `runtime="node"`，同时传入解释器的绝对路径
+`program`。脚本内容经 SFTP 上传到私有临时目录，`args`、`cwd`、`env` 与
+`stdin_base64` 通过结构化接口传递。脚本大小上限为 1 MiB，执行后检查
+`script_cleanup.removed`。接口沿用普通 SSH 身份、退出码及超时处理，详细参数见
+[长脚本参考](skills/dropbear-win/references/mcp.md#long-scripts)。
+
 ## 构建
 
 Linux 交叉编译需要 Bash、make、Python 3 及目标架构的 MinGW-w64 GCC/binutils。
@@ -265,6 +273,10 @@ python tests/windows_native.py dist/dropbear-win-x64.exe
 python tests/windows_protocol.py dist/dropbear-win-x64.exe
 python tests/windows_lifecycle.py dist/dropbear-win-x64.exe
 ```
+
+在 Windows 管理员终端执行 `python tests/test_run_script.py dist/dropbear-win-x64.exe`
+可验证长脚本、独立 stdin、参数、异常清理及临时目录行为。测试使用当前 Python 和系统
+Windows PowerShell，可附加 `--node-program C:\Tools\node.exe` 验证 Node。
 
 安装确认、迁移及自动清理可在专用 Wine 环境中回归，包括限制清理进程脱离 Job 的场景。
 测试会创建并删除临时 SCM 服务和安装文件，请使用没有现有 DropbearWin 安装的 Wine prefix。

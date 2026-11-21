@@ -41,7 +41,7 @@ _COMMONOBJS=dbutil.o buffer.o dbhelpers.o \
 		dss.o bignum.o \
 		signkey.o rsa.o dbrandom.o \
 		queue.o \
-		win-account.o win32-compat.o win32-process.o win-sftp.o win-service.o win-agent-bundle.o win-resources.o win-port.o win-log.o \
+		win-account.o win32-compat.o win32-process.o win-sftp.o win-service.o win-agent-bundle.o win-resources.o win-port.o win-log.o win-script.o \
 		atomicio.o compat.o fake-rfc2553.o \
 		ltc_prng.o ecc.o ecdsa.o sk-ecdsa.o crypto_desc.o \
 		curve25519.o ed25519.o sk-ed25519.o \
@@ -175,6 +175,9 @@ $(OBJ_DIR)/win-port.o: @srcdir@/../../src/windows/win-port.c $(HEADERS) | $(OBJ_
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(srcdir) -c $< -o $@
 
 $(OBJ_DIR)/win-log.o: @srcdir@/../../src/windows/win-log.c $(HEADERS) | $(OBJ_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(srcdir) -c $< -o $@
+
+$(OBJ_DIR)/win-script.o: @srcdir@/../../src/windows/win-script.c $(HEADERS) | $(OBJ_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(srcdir) -c $< -o $@
 
 # for simplicity assume all source depends on all headers

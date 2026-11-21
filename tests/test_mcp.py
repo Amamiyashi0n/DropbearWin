@@ -20,6 +20,11 @@ import dropbear_mcp
 
 
 class FixtureRemote(Remote):
+    def run_script(self, script, runtime="powershell", program=None, args=None, cwd="",
+                   env=None, stdin_base64="", timeout=30, encoding=None):
+        return {"exit_code": 7, "stdout": "script-ok", "stderr": "",
+                "script_cleanup": {"removed": True}}
+
     def session_list(self):
         return {"sessions": [{"session_id": 3, "username": "agent", "windows_user": "host\\agent",
             "sid": "S-1-5-21-fixture", "state": "Active", "selectable": True}]}
@@ -81,9 +86,12 @@ class MCPContract(unittest.IsolatedAsyncioTestCase):
                 listed = await client.list_tools()
                 tools = {tool.name: tool for tool in listed.tools}
                 self.assertEqual(set(tools), {"dropbear_context", "dropbear_guide",
-                    "dropbear_manifest", "dropbear_sessions", "dropbear_run_command", "dropbear_exec", "dropbear_desktop_launch", "dropbear_session_screenshot", "dropbear_session_display", "dropbear_session_set_resolution",
+                    "dropbear_manifest", "dropbear_sessions", "dropbear_run_command", "dropbear_exec", "dropbear_run_script", "dropbear_desktop_launch", "dropbear_session_screenshot", "dropbear_session_display", "dropbear_session_set_resolution",
                     "dropbear_session_list", "dropbear_session_exec", "dropbear_session_ui", "dropbear_session_worker_start", "dropbear_session_worker_call", "dropbear_session_worker_stop"})
                 self.assertEqual(set(tools), set(json.loads((ROOT / "src/windows/agent-mcp.json").read_bytes())["tools"]))
+                script_result = await client.call_tool("dropbear_run_script", {"script": "Write-Output script-ok"})
+                self.assertFalse(script_result.isError)
+                self.assertTrue(json.loads(script_result.content[0].text)["script_cleanup"]["removed"])
                 listed_sessions = await client.call_tool("dropbear_session_list")
                 self.assertEqual(json.loads(listed_sessions.content[0].text)["sessions"][0]["session_id"], 3)
                 executed = await client.call_tool("dropbear_session_exec", {
@@ -134,6 +142,91 @@ class MCPContract(unittest.IsolatedAsyncioTestCase):
 
 
 class TransportTests(unittest.TestCase):
+    def script_remote(self):
+        remote = Remote(Settings("host", "user"))
+        remote.connect = MagicMock()
+        remote.probe = MagicMock(return_value={"script_staging": True,
+            "server_executable": r"C:\Dropbear\dropbear-win-x64.exe", "windows_user": "host\\user",
+            "session_id": 0})
+        remote._exchange = MagicMock(side_effect=[
+            (json.dumps({"directory": r"C:\Temp\private script", "powershell":
+                         r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"}).encode(), b"", 0),
+            (b"output\x00\xff", b"error", 7), (b"{}", b"", 0)])
+        return remote
+
+    def test_long_script_separate_stdin_and_cleanup(self):
+        remote = self.script_remote()
+        script = "# 中文\n" * 12000
+        result = remote.run_script(script, args=["space & argument"], env={"DATA": "value"},
+                                   stdin_base64="AP8=")
+        self.assertEqual(result["exit_code"], 7)
+        self.assertEqual(result["stdout_base64"], "b3V0cHV0AP8=")
+        self.assertTrue(result["script_cleanup"]["removed"])
+        self.assertEqual(remote.connect.call_count, 1)
+        client = remote.connect.return_value
+        client.close.assert_called_once()
+        stream = client.open_sftp.return_value.__enter__.return_value.file.return_value.__enter__.return_value
+        stream.write.assert_called_once_with(script.encode("utf-8-sig"))
+        request = remote._exchange.call_args_list[1].kwargs["payload"]
+        expected = dropbear_mcp.encode_request({
+            "program": r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            "args": ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+                     r"C:\Temp\private script\script.ps1", "space & argument"],
+            "cwd": "", "env": {"DATA": "value"}}) + b"\x00\xff"
+        self.assertEqual(request, expected)
+        self.assertNotIn(script.encode(), request)
+
+    def test_failed_execution_still_cleans_script(self):
+        for error in (TimeoutError("execution timed out"), ValueError("output exceeded")):
+            remote = self.script_remote()
+            stage = next(remote._exchange.side_effect)
+            remote._exchange.side_effect = [stage, error, (b"{}", b"", 0)]
+            with self.assertRaisesRegex(RuntimeError, str(error)):
+                remote.run_script("print('test')", runtime="python", program=r"C:\Python\python.exe")
+            self.assertEqual(remote._exchange.call_count, 3)
+            self.assertIn(base64.b64encode(b"--script-cleanup"),
+                          remote._exchange.call_args.kwargs["payload"])
+
+    def test_upload_failure_and_cleanup_failure_are_visible(self):
+        remote = self.script_remote()
+        stage = next(remote._exchange.side_effect)
+        remote._exchange.side_effect = [stage, (b"", b"directory is busy", 1)]
+        remote.connect.return_value.open_sftp.side_effect = OSError("upload failed")
+        with self.assertRaisesRegex(RuntimeError, "upload failed.*script_cleanup=.*directory is busy"):
+            remote.run_script("Write-Output test")
+
+    def test_script_cleanup_failure_preserves_execution_result(self):
+        remote = self.script_remote()
+        responses = list(remote._exchange.side_effect)
+        responses[-1] = (b"", b"directory is busy", 1)
+        remote._exchange.side_effect = responses
+        result = remote.run_script("Write-Output test")
+        self.assertEqual(result["exit_code"], 7)
+        self.assertFalse(result["script_cleanup"]["removed"])
+        self.assertEqual(result["script_cleanup"]["error"], "directory is busy")
+
+    def test_invalid_script_inputs_do_not_connect(self):
+        for params in ({"runtime": "cmd"}, {"script": "x" * (1024 * 1024 + 1)},
+                       {"runtime": "python"}, {"stdin_base64": "bad!"}, {"timeout": 301},
+                       {"program": "relative.exe"}, {"cwd": "relative"}, {"encoding": "unknown-codec"}):
+            remote = self.script_remote()
+            with self.assertRaises((ValueError, LookupError)):
+                remote.run_script(**({"script": "test"} | params))
+            remote.connect.assert_not_called()
+
+    def test_old_server_and_unknown_staging_outcome(self):
+        remote = self.script_remote()
+        remote.probe.return_value["script_staging"] = False
+        with self.assertRaisesRegex(RuntimeError, "Upgrade the remote EXE"):
+            remote.run_script("Write-Output test")
+        remote._exchange.assert_not_called()
+        remote.connect.return_value.close.assert_called_once()
+        remote = self.script_remote()
+        remote._exchange.side_effect = RuntimeError("SSH closed without an exit status")
+        with self.assertRaisesRegex(RuntimeError, "staging outcome unknown; stage_id=[0-9a-f]{32}"):
+            remote.run_script("Write-Output test")
+        self.assertEqual(remote._exchange.call_count, 1)
+
     def test_invalid_display_inputs_do_not_connect(self):
         remote = Remote(Settings("host", "user"))
         for kwargs in ({"session_id": 0}, {"session_id": 3, "width": 1280},

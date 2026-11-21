@@ -153,6 +153,7 @@ static int print_agent_probe(void) {
 	fputs("\"identity_rule\":\"SSH user is a Dropbear authentication label; ordinary commands inherit the server process Windows token\","
 		"\"agent_guide_command\":\"__dropbear_win_guide__\","
 		"\"system_query_commands\":[\"uname\",\"sysinfo\",\"cpuinfo\",\"meminfo\",\"diskinfo\"],"
+		"\"script_staging\":true,"
 		"\"desktop_launch\":{\"command\":\"--desktop-launch\","
 		"\"target\":\"console-or-explicit-session\",\"token\":\"selected-session-user\","
 		"\"arbitrary_session\":true,\"session_option\":\"--session\",\"user_check_option\":\"--expect-user\","
@@ -202,6 +203,10 @@ static int print_agent_guide(void) {
 		"## System queries\n\n"
 		"Use standalone SSH commands `uname -a`, `sysinfo`, `cpuinfo`, `meminfo`, or `diskinfo` as advertised by `system_query_commands` in the probe. "
 		"These read-only commands work with either shell backend. `diskinfo` reports the volume containing the SSH working directory.\n\n"
+		"## Long scripts\n\n"
+		"MCP `dropbear_run_script` stages PowerShell, Python or Node script text in a private temporary directory over SFTP, "
+		"then runs the interpreter through DBX2 with separate stdin, cwd and environment. It uses the SSH Windows identity/session. "
+		"Check `script_staging` in the live probe and `script_cleanup.removed` in the result; cleanup errors report the directory and staging ID.\n\n"
 		"## Desktop-session rule\n\n"
 		"Ordinary commands remain in the SSH service session. `--desktop-launch` defaults to the physical console. "
 		"Use `--desktop-launch --session ID --expect-user USER C:\\absolute\\program.exe [args]` for an existing active/connected console or RDP login. "
@@ -315,6 +320,24 @@ static int run_native_internal(int argc, char **argv) {
 	if (argc == 3 && !strcmp(argv[1], "--export-agent-files"))
 		return dropbear_win_bundle_export(argv[2]);
 	if (argc == 2 && !strcmp(argv[1], "--dropbear-win-exec")) return dropbear_win_exec_main();
+	if (argc == 3 && (!strcmp(argv[1], "--script-stage") || !strcmp(argv[1], "--script-cleanup"))) {
+		char directory[3 * MAX_PATH], powershell[3 * MAX_PATH];
+		wchar_t windows[MAX_PATH], program[MAX_PATH];
+		int result;
+		DWORD length = GetWindowsDirectoryW(windows, MAX_PATH);
+		if (!length || length >= MAX_PATH ||
+				_snwprintf(program, MAX_PATH, L"%ls\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", windows) < 0 ||
+				!WideCharToMultiByte(CP_UTF8, 0, program, -1, powershell, sizeof(powershell), NULL, NULL)) return 1;
+		result = dropbear_win_script_directory(argv[2], !strcmp(argv[1], "--script-stage"),
+			directory, sizeof(directory));
+		if (result) return result;
+		fputs("{\"directory\":", stdout);
+		print_json_string(directory);
+		fputs(",\"powershell\":", stdout);
+		print_json_string(powershell);
+		fputs("}\n", stdout);
+		return 0;
+	}
 	if (argc == 3 && !strcmp(argv[1], "--dropbear-win-system-query")) {
 		char *command = decode_hex_command(argv[2]);
 		int result;

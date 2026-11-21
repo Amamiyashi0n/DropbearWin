@@ -42,6 +42,7 @@ only for this DropbearWin build; local ssh-agent and key-file discovery are disa
 | `dropbear_sessions` | No arguments; `query session` result and security context |
 | `dropbear_run_command` | `command`, optional `timeout`, `encoding` |
 | `dropbear_exec` | `program`, optional `args`, `cwd`, `env`, `stdin_base64`, `timeout`, `encoding` |
+| `dropbear_run_script` | `script`, optional `runtime=powershell`, interpreter `program`, script `args`, `cwd`, `env`, `stdin_base64`, `timeout`, `encoding` |
 | `dropbear_desktop_launch` | `program`, optional `args`, `session_id`, `expected_user`; launches using the selected logged-on user's token |
 | `dropbear_session_screenshot` | `session_id`, optional `expected_user`; PNG image and actual user/session/dimensions |
 | `dropbear_session_display` | `session_id`, optional `expected_user`; displays/current and driver-advertised modes |
@@ -104,3 +105,48 @@ Prompt: `dropbear_onboarding` (live context plus guide).
 The MCP host controls loading resources/prompts and approval of tools. Installing
 the server does not force every Agent to read its resources. The Skill and MCP
 server instructions tell the Agent to discover context first.
+
+## Long scripts
+
+`dropbear_run_script` uploads script text through SFTP, then runs the interpreter
+through DBX2. Script bytes are stored in a file, and stdin remains available to
+the running script. Supported runtimes are `powershell`, `python`, and `node`.
+PowerShell defaults to the server's Windows PowerShell path and receives a
+UTF-8 BOM script with process-scoped `-ExecutionPolicy Bypass`. Python and Node
+require an absolute `program` path to the installed interpreter. `args` contains
+script arguments. The script runs as the SSH Windows identity/session with the
+usual command Job lifetime, cwd, environment, output and exit-code behavior.
+
+```json
+{
+  "script": "import sys, json\nprint(json.dumps([sys.argv[1:], sys.stdin.read()]))\nsys.exit(7)",
+  "runtime": "python",
+  "program": "C:\\Python311\\python.exe",
+  "args": ["argument with spaces"],
+  "cwd": "C:\\Users\\Public",
+  "stdin_base64": "aW5wdXQ=",
+  "timeout": 30,
+  "encoding": "utf-8"
+}
+```
+
+The live probe must advertise `script_staging=true`. The native EXE creates a
+unique directory under its Windows temporary directory with an ACL granting
+access to the SSH Windows identity, SYSTEM and Administrators. Staging, upload,
+execution and cleanup share one authenticated SSH connection. The script limit
+is 1 MiB including its encoding marker, stdin 256 KiB, combined output 1 MiB and
+execution timeout 300 seconds. Interpreter paths and arguments still fit within
+the Windows process command-line limit. For larger script files, use SFTP and
+`dropbear_exec` directly.
+
+Successful calls return the normal execution result and `script_cleanup` with
+`stage_id`, `directory`, and `removed`. Nonzero script exit codes are ordinary
+results. Upload/transport/timeout failures raise a tool error after attempting
+cleanup. Cleanup failure preserves the execution result or original error and
+reports the directory and staging ID. There is no automatic script retry.
+If staging itself loses its connection, the error reports the ID with an unknown
+staging outcome. To retry cleanup, use structured exec on the same server EXE
+with `args=["--script-cleanup", "<stage_id>"]` under the original SSH identity.
+Cleanup removes the uploaded script names and then the empty directory, preserving
+other files created by the script. Inspect those files when cleanup reports a
+nonempty directory.
