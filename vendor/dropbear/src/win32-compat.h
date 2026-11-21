@@ -237,6 +237,9 @@ int dropbear_win_desktop_launch_main(void);
 int dropbear_win_receive_connection(const char *pipe_handle_text, int *auth_fd);
 void dropbear_win_process_cleanup(void);
 void dropbear_win_resource_summary(char *output, size_t size);
+void dropbear_win_windows_version(char *output, size_t size);
+int dropbear_win_is_system_query(const char *command);
+int dropbear_win_system_query(const char *command);
 void dropbear_win_runtime_security(char *identity, size_t identity_size,
 	char *token_text, size_t token_size, DWORD *session_id);
 int dropbear_win_agent_publish(void);

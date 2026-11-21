@@ -120,6 +120,32 @@ Windows 路径可写成 `C:/Temp/remote.bin`。含空格或中文的路径优先
 保留原始 stdout/stderr。每次远程执行拥有自己的工作目录和环境，前一次的 `cd` 与
 环境变量赋值不会延续。
 
+## 查询 Windows 系统信息
+
+以下命令作为独立的 SSH exec 请求发送，在 CMD 和 PowerShell 两种后端下都可用。
+`__dropbear_win_probe__` 中的 `system_query_commands` 列出服务端支持的内置查询。
+进入交互式 Shell 后，或者在远端命令中使用管道、重定向时，由该 Shell 解析命令。
+
+```sh
+ssh ssh-user@windows-host uname -a
+ssh ssh-user@windows-host sysinfo
+ssh ssh-user@windows-host cpuinfo
+ssh ssh-user@windows-host meminfo
+ssh ssh-user@windows-host diskinfo
+```
+
+| 命令 | 输出 |
+| --- | --- |
+| `uname`、`uname -s` | 内核名称 `Windows_NT` |
+| `uname -n`、`uname -r`、`uname -v` | 主机名、NT 主次版本、Windows 构建号 |
+| `uname -m`、`uname -o` | Windows 系统架构（如 `x86_64`）、系统名称 `Windows` |
+| `uname -a` | 汇总上述字段，`uname --help` 可查看参数 |
+| `sysinfo` | 主机名、Windows 版本、EXE 架构及下列资源快照 |
+| `cpuinfo`、`meminfo`、`diskinfo` | 逻辑处理器数与采样占用率、物理内存、SSH 工作目录所在卷的容量 |
+
+MCP 客户端也可通过 `dropbear_run_command` 调用这些命令。`uname -m` 查询的是系统架构，
+`sysinfo` 的 `Binary` 字段显示 Dropbear-win EXE 的架构。
+
 ## Agent、Skill 与 MCP
 
 ### 通过 SSH 发现能力

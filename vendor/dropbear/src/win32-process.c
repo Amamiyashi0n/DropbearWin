@@ -713,39 +713,6 @@ static void append_motd(char *buffer, size_t buffer_size, size_t *used,
 	else *used += (size_t)count;
 }
 
-static const char *native_architecture(void) {
-	SYSTEM_INFO info;
-	GetNativeSystemInfo(&info);
-	switch (info.wProcessorArchitecture) {
-		case PROCESSOR_ARCHITECTURE_AMD64: return "x64";
-		case PROCESSOR_ARCHITECTURE_INTEL: return "x86";
-#ifdef PROCESSOR_ARCHITECTURE_ARM64
-		case PROCESSOR_ARCHITECTURE_ARM64: return "ARM64";
-#endif
-		case PROCESSOR_ARCHITECTURE_ARM: return "ARM";
-		default: return "unknown architecture";
-	}
-}
-
-static void windows_version(char *output, size_t output_size) {
-	typedef LONG (WINAPI *rtl_get_version_fn)(OSVERSIONINFOW *);
-	OSVERSIONINFOW version;
-	rtl_get_version_fn rtl_get_version;
-	HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-	memset(&version, 0, sizeof(version));
-	version.dwOSVersionInfoSize = sizeof(version);
-	rtl_get_version = ntdll
-		? (rtl_get_version_fn)(void *)GetProcAddress(ntdll, "RtlGetVersion") : NULL;
-	if (rtl_get_version && rtl_get_version(&version) == 0) {
-		snprintf(output, output_size, "Windows NT %lu.%lu build %lu (%s)",
-			(unsigned long)version.dwMajorVersion,
-			(unsigned long)version.dwMinorVersion,
-			(unsigned long)version.dwBuildNumber, native_architecture());
-	} else {
-		snprintf(output, output_size, "Windows (%s)", native_architecture());
-	}
-}
-
 static const char *integrity_name(DWORD integrity) {
 	if (integrity == 0) return "integrity unavailable";
 	if (integrity >= SECURITY_MANDATORY_SYSTEM_RID) return "System";
@@ -878,7 +845,7 @@ static int write_session_motd(int output_fd, const wchar_t *shell,
 	wide_to_utf8(shell, shell_utf8, sizeof(shell_utf8));
 	if (GetCurrentDirectoryW(sizeof(wide_buffer) / sizeof(wide_buffer[0]), wide_buffer))
 		wide_to_utf8(wide_buffer, cwd, sizeof(cwd));
-	windows_version(os, sizeof(os));
+	dropbear_win_windows_version(os, sizeof(os));
 	dropbear_win_runtime_security(identity, sizeof(identity), token, sizeof(token), &session_id);
 	memset(&codepage_info, 0, sizeof(codepage_info));
 	if (GetCPInfoExW(GetOEMCP(), 0, &codepage_info))
@@ -1087,6 +1054,12 @@ int dropbear_win_spawn_shell(const char *command, const char *ssh_user,
 			!strcmp(command, "__dropbear_win_mcp__") ? L"--dropbear-win-mcp" :
 			!strcmp(command, "__dropbear_win_guide__") ? L"--dropbear-win-guide" :
 			!strcmp(command, "__dropbear_win_exec__") ? L"--dropbear-win-exec" : L"--dropbear-win-sftp", NULL);
+		internal_mode = 1;
+	} else if (dropbear_win_is_system_query(command)) {
+		if (!GetModuleFileNameW(NULL, executable, MAX_PATH)) goto fail;
+		application = executable;
+		command_line = make_internal_command_line(executable,
+			L"--dropbear-win-system-query", command);
 		internal_mode = 1;
 	} else if (legacy_scp_command(command)) {
 		if (!GetModuleFileNameW(NULL, executable, MAX_PATH)) goto fail;

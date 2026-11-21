@@ -34,6 +34,41 @@ def execute(client, command):
     return output, error, status
 
 
+def check_system_queries(client):
+    def query(command):
+        out, err, status = execute(client, command)
+        assert status == 0 and not err, (command, out, err, status)
+        return out.decode("utf-8").strip()
+
+    assert query("uname") == query("uname --kernel-name") == "Windows_NT"
+    host = query("uname -n")
+    release = query("uname -r")
+    build = query("uname -v")
+    machine = query("uname --machine")
+    assert host and re.fullmatch(r"\d+\.\d+", release) and build.isdecimal()
+    assert machine in {"x86_64", "i686", "aarch64", "arm", "unknown"}
+    assert query("  uname\t-rm  ") == f"{release} {machine}"
+    assert query("uname -a") == f"Windows_NT {host} {release} {build} {machine} Windows"
+    assert query("uname --help").startswith("Usage: uname")
+    out, err, status = execute(client, "uname -z")
+    assert status == 2 and not out and b"Usage: uname" in err, (out, err, status)
+    summary = query("sysinfo")
+    assert host in summary and f"Windows NT {release} build {build}" in summary
+    assert all(field in summary for field in ("Binary:", "CPU:", "Memory:", "Disk (cwd):"))
+    assert "logical processors" in query("cpuinfo")
+    memory = query("meminfo")
+    assert "Memory:" in memory and "CPU:" not in memory
+    assert "Disk (cwd):" in query("diskinfo")
+
+
+def check_system_query_shell_fallback(client, backend):
+    # Compounds belong to the configured shell, including names defined by it.
+    command = "uname -a & echo fallback & exit /b 0" if backend == "cmd" else (
+        "function uname { 'shell function' }; uname -a; Write-Output fallback")
+    out, _, status = execute(client, command)
+    assert status == 0 and b"fallback" in out, (out, status)
+
+
 def run(executable, backend):
     with tempfile.TemporaryDirectory(prefix="dropbear-agent-") as directory:
         directory = Path(directory)
@@ -126,6 +161,9 @@ def run(executable, backend):
                 assert probe["exec_subsystem"] == "dropbear-exec-v1"
                 assert probe["control_encoding"] == "base64"
                 assert probe["exec_protocols"] == [1, 2] and probe["exec_protocol_default"] == 2
+                assert probe["system_query_commands"] == ["uname", "sysinfo", "cpuinfo", "meminfo", "diskinfo"]
+                check_system_queries(client)
+                check_system_query_shell_fallback(client, backend)
                 guide, err, status = execute(client, "__dropbear_win_guide__")
                 assert status == 0 and not err, (guide, err, status)
                 for text in (b"name: dropbear-win-agent-context", b"Authoritative connection",

@@ -48,6 +48,32 @@ normally reports `NT AUTHORITY\SYSTEM` and Session 0. A portable instance can us
 a different identity. The guide documents capabilities and does not expand the
 user's requested scope.
 
+## Query Windows system information
+
+Check `system_query_commands` in `__dropbear_win_probe__` before relying on the
+built-in commands. Send each command as a standalone SSH exec request.
+Interactive commands, pipelines, and redirections use the remote shell's
+normal command lookup.
+
+```sh
+ssh user@host uname -a
+ssh user@host uname -m
+ssh user@host sysinfo
+ssh user@host cpuinfo
+ssh user@host meminfo
+ssh user@host diskinfo
+```
+
+`uname` prints `Windows_NT` by default. Use `-n` for the hostname, `-r` for
+the NT major/minor version, `-v` for the build number, `-m` for the native OS
+architecture, and `-o` for the OS name. `-a` prints all fields and `--help`
+lists the supported flags. `sysinfo` includes the Windows version, EXE
+architecture, logical CPUs and recent utilization, physical memory, and disk
+space. `diskinfo` reports the volume containing the SSH working directory.
+Use `dropbear_run_command(command="uname -m", encoding="utf-8")` or the
+same MCP tool with any command above. For older servers without the capability,
+use the probe for connection context or `ver` when `shell` is `cmd`.
+
 ## Execute
 
 Prefer `dropbear_exec` for EXE/argument-array/cwd/environment requests. It uses

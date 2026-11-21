@@ -152,6 +152,7 @@ static int print_agent_probe(void) {
 	fprintf(stdout, ",\"session_id\":%lu,", (unsigned long)session_id);
 	fputs("\"identity_rule\":\"SSH user is a Dropbear authentication label; ordinary commands inherit the server process Windows token\","
 		"\"agent_guide_command\":\"__dropbear_win_guide__\","
+		"\"system_query_commands\":[\"uname\",\"sysinfo\",\"cpuinfo\",\"meminfo\",\"diskinfo\"],"
 		"\"desktop_launch\":{\"command\":\"--desktop-launch\","
 		"\"target\":\"console-or-explicit-session\",\"token\":\"selected-session-user\","
 		"\"arbitrary_session\":true,\"session_option\":\"--session\",\"user_check_option\":\"--expect-user\","
@@ -198,6 +199,9 @@ static int print_agent_guide(void) {
 		"- Use the `dropbear-exec-v1` subsystem for structured executable/argument/environment requests without shell quoting.\n"
 		"- SFTP and legacy SCP are supported. Use Windows paths and absolute executable paths where practical.\n"
 		"- Do not inspect Microsoft OpenSSH configuration to explain this server; DropbearWin has its own account, key, data, and service model.\n\n"
+		"## System queries\n\n"
+		"Use standalone SSH commands `uname -a`, `sysinfo`, `cpuinfo`, `meminfo`, or `diskinfo` as advertised by `system_query_commands` in the probe. "
+		"These read-only commands work with either shell backend. `diskinfo` reports the volume containing the SSH working directory.\n\n"
 		"## Desktop-session rule\n\n"
 		"Ordinary commands remain in the SSH service session. `--desktop-launch` defaults to the physical console. "
 		"Use `--desktop-launch --session ID --expect-user USER C:\\absolute\\program.exe [args]` for an existing active/connected console or RDP login. "
@@ -311,6 +315,14 @@ static int run_native_internal(int argc, char **argv) {
 	if (argc == 3 && !strcmp(argv[1], "--export-agent-files"))
 		return dropbear_win_bundle_export(argv[2]);
 	if (argc == 2 && !strcmp(argv[1], "--dropbear-win-exec")) return dropbear_win_exec_main();
+	if (argc == 3 && !strcmp(argv[1], "--dropbear-win-system-query")) {
+		char *command = decode_hex_command(argv[2]);
+		int result;
+		if (!command) return 2;
+		result = dropbear_win_system_query(command);
+		m_free(command);
+		return result;
+	}
 	if (argc >= 2 && !strcmp(argv[1], "--desktop-launch"))
 		return dropbear_win_desktop_launch_main();
 	if (argc == 2 && strcmp(argv[1], "--dropbear-win-probe") == 0)
