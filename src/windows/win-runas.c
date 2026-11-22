@@ -89,10 +89,10 @@ static void runas_print_usage(FILE *stream) {
 	fputs(
 		"Usage:\n"
 		"  su --list                                         List logged-on Windows user sessions (JSON)\n"
-		"  su [--admin] <username> <command...>              Run as logged-on user (--admin elevates UAC split token)\n"
-		"  su [--admin] --active <command...>                Run as active logged-on user\n"
-		"  su [--admin] --session <id> <command...>          Run in specific WTS session ID\n"
-		"  su [--admin] -p <password> <username> <cmd...>    Force-logon local user/Administrator (even if not logged in)\n"
+		"  su [--admin] [--in-session] <user> <cmd...>       Run as logged-on user (Session 0 by default; --in-session keeps user WTS session silently)\n"
+		"  su [--admin] [--in-session] --active <cmd...>     Run as active logged-on user\n"
+		"  su [--admin] --session <id> <cmd...>              Run silently inside the specified WTS session ID\n"
+		"  su [--admin] -p <password> <user> <cmd...>        Force-logon local user/Administrator (even if not logged in)\n"
 		"Aliases: runas-user, --elevated (same as --admin), --password (same as -p)\n",
 		stream);
 }
@@ -229,7 +229,7 @@ static wchar_t *runas_augment_silent_env(const wchar_t *base_env) {
 	return buf;
 }
 
-static int runas_execute(int mode_active, int want_admin, DWORD requested_session,
+static int runas_execute(int mode_active, int want_admin, int in_session, DWORD requested_session,
 		const char *target_user, const char *password_utf8, const char *command_utf8) {
 	typedef DWORD (WINAPI *active_session_fn)(void);
 	typedef BOOL (WINAPI *enum_sessions_fn)(HANDLE, DWORD, DWORD, PWTS_SESSION_INFOW *, DWORD *);
@@ -463,7 +463,7 @@ static int runas_execute(int mode_active, int want_admin, DWORD requested_sessio
 	 * executes 100% silently in the background (physically isolated from the
 	 * user's interactive desktop: zero window flash, zero focus steal, zero
 	 * busy cursor) while keeping the user's SID, profile, HKCU, and credentials. */
-	if (use_wts_desktop) {
+	if (use_wts_desktop && !in_session) {
 		HANDLE sess0_token = NULL;
 		DWORD zero_session = 0;
 		if (DuplicateTokenEx(primary_token, MAXIMUM_ALLOWED, NULL,
@@ -556,6 +556,7 @@ int dropbear_win_su_exec_command(const char *command) {
 	char pass_buf[512] = "";
 	int has_pass = 0;
 	int want_admin = 0;
+	int in_session = 0;
 	int mode_active = 0;
 	DWORD requested_session = 0xffffffffUL;
 
@@ -576,6 +577,11 @@ int dropbear_win_su_exec_command(const char *command) {
 		const char *next = read_token(p, tok, sizeof(tok));
 		if (!strcmp(tok, "--admin") || !strcmp(tok, "--elevated")) {
 			want_admin = 1;
+			p = next;
+			continue;
+		}
+		if (!strcmp(tok, "--in-session")) {
+			in_session = 1;
 			p = next;
 			continue;
 		}
@@ -602,6 +608,7 @@ int dropbear_win_su_exec_command(const char *command) {
 				return 2;
 			}
 			requested_session = (DWORD)sid;
+			in_session = 1;
 			break;
 		}
 		/* Otherwise this token is the target username. */
@@ -617,7 +624,7 @@ int dropbear_win_su_exec_command(const char *command) {
 		return 2;
 	}
 	{
-		int rc = runas_execute(mode_active, want_admin, requested_session,
+		int rc = runas_execute(mode_active, want_admin, in_session, requested_session,
 			user_buf[0] ? user_buf : NULL, has_pass ? pass_buf : NULL, p);
 		SecureZeroMemory(pass_buf, sizeof(pass_buf));
 		return rc;
