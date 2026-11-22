@@ -163,3 +163,12 @@ For MCP installation, environment variables and tool schemas, read
 ## Environment & Tool Discovery
 
 On connect, Dropbear-win merges live System and User Registry `PATH` (including the logged-on interactive user when running as a service) and exposes discovered executables in `probe.tools` (and via `ssh user@host toolsinfo`). `dropbear_run_script` automatically uses `probe.tools` for `python`/`node` when `program` is omitted.
+
+## Silent User Switching (`dropbear_run_as_user` / `su`)
+
+When the service runs as `NT AUTHORITY\SYSTEM`, commands do not see a logged-on user's `USERPROFILE`, `HKCU`, Git config, or Windows Credential Manager. Use `dropbear_run_as_user` (or SSH `su` / `runas-user`) to run commands silently as a Windows user without disturbing their desktop:
+
+- **Default (Session 0 isolated)**: `dropbear_run_as_user(command="git push", username="Amamiya")` or `active=True` runs in Session 0 with the user's primary token, profile, and credentials — physically isolated from the user's desktop (zero window flash, zero focus steal, zero busy cursor).
+- **In-session silent mode**: pass `in_session=True` or an explicit `session_id` (from `dropbear_session_list` or `su --list`) when a task requires the user's actual WTS session (e.g. session-scoped COM/pipes/GPU). It still runs silently (`CREATE_NO_WINDOW`, `SW_HIDE`, `STARTF_FORCEOFFFEEDBACK`, `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, `SSH_ASKPASS_REQUIRE=never`).
+- **Elevated Local Administrator**: set `admin=True` (or SSH `su --admin`) to elevate a UAC split token via `TokenLinkedToken` to High Mandatory Level.
+- **Force-logon non-logged-in user**: pass `username` + `password` (or SSH `su [--admin] -p <password> <user> <cmd>`) to log on a local user or built-in `Administrator` via `LogonUserW` + `LoadUserProfileW`.

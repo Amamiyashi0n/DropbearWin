@@ -86,7 +86,7 @@ class MCPContract(unittest.IsolatedAsyncioTestCase):
                 listed = await client.list_tools()
                 tools = {tool.name: tool for tool in listed.tools}
                 self.assertEqual(set(tools), {"dropbear_context", "dropbear_guide",
-                    "dropbear_manifest", "dropbear_sessions", "dropbear_run_command", "dropbear_exec", "dropbear_run_script", "dropbear_desktop_launch", "dropbear_session_screenshot", "dropbear_session_display", "dropbear_session_set_resolution",
+                    "dropbear_manifest", "dropbear_sessions", "dropbear_run_command", "dropbear_exec", "dropbear_run_script", "dropbear_run_as_user", "dropbear_desktop_launch", "dropbear_session_screenshot", "dropbear_session_display", "dropbear_session_set_resolution",
                     "dropbear_session_list", "dropbear_session_exec", "dropbear_session_ui", "dropbear_session_worker_start", "dropbear_session_worker_call", "dropbear_session_worker_stop"})
                 self.assertEqual(set(tools), set(json.loads((ROOT / "src/windows/agent-mcp.json").read_bytes())["tools"]))
                 script_result = await client.call_tool("dropbear_run_script", {"script": "Write-Output script-ok"})
@@ -356,6 +356,24 @@ async def live():
             print("PASS live stdio MCP: discovery, resources, prompt, sessions, shell, structured exec")
             print(json.dumps({k: value[k] for k in ("windows_user", "session_id", "default_port")}))
 
+
+
+    def test_run_as_user_validation_and_commands(self):
+        remote = Remote(Settings("example.invalid", "user", password="secret"))
+        remote.probe = MagicMock(return_value={"os": "windows", "version": 2, "user_switch": True, "windows_user": "NT AUTHORITY\\SYSTEM", "session_id": 0})
+        remote.exchange = MagicMock(return_value=(b"ok\r\n", b"", 0))
+        res = remote.run_as_user("git status", username="Amamiya", admin=True)
+        self.assertEqual(res["exit_code"], 0)
+        self.assertEqual(remote.exchange.call_args.kwargs["command"], "su --admin Amamiya git status")
+        remote.run_as_user("whoami", session_id=2, admin=True)
+        self.assertEqual(remote.exchange.call_args.kwargs["command"], "su --admin --session 2 whoami")
+        remote.run_as_user("whoami", active=True, in_session=True)
+        self.assertEqual(remote.exchange.call_args.kwargs["command"], "su --in-session --active whoami")
+        remote.run_as_user("whoami", username="Administrator", password="pw", admin=True)
+        self.assertEqual(remote.exchange.call_args.kwargs["command"], 'su --admin -p "pw" Administrator whoami')
+        for bad in ({"command": ""}, {"command": "ok", "password": "pw"}, {"command": "ok", "username": "a", "session_id": 1}, {"command": "ok", "timeout": 0}):
+            with self.assertRaises(ValueError):
+                remote.run_as_user(**bad)
 
 if __name__ == "__main__":
     if "--fixture" in sys.argv:

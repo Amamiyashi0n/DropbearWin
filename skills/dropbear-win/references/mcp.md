@@ -43,6 +43,7 @@ only for this DropbearWin build; local ssh-agent and key-file discovery are disa
 | `dropbear_run_command` | `command`, optional `timeout`, `encoding` |
 | `dropbear_exec` | `program`, optional `args`, `cwd`, `env`, `stdin_base64`, `timeout`, `encoding` |
 | `dropbear_run_script` | `script`, optional `runtime=powershell`, interpreter `program`, script `args`, `cwd`, `env`, `stdin_base64`, `timeout`, `encoding` |
+| `dropbear_run_as_user` | `command`, optional `username`, `session_id`, `active`, `admin`, `in_session`, `password`, `timeout`, `encoding`; silent user-switch (`su`) |
 | `dropbear_desktop_launch` | `program`, optional `args`, `session_id`, `expected_user`; launches using the selected logged-on user's token |
 | `dropbear_session_screenshot` | `session_id`, optional `expected_user`; PNG image and actual user/session/dimensions |
 | `dropbear_session_display` | `session_id`, optional `expected_user`; displays/current and driver-advertised modes |
@@ -150,3 +151,12 @@ with `args=["--script-cleanup", "<stage_id>"]` under the original SSH identity.
 Cleanup removes the uploaded script names and then the empty directory, preserving
 other files created by the script. Inspect those files when cleanup reports a
 nonempty directory.
+
+## Silent user switching (`dropbear_run_as_user`)
+
+`dropbear_run_as_user` invokes the server's native `su` handler (requires `user_switch=true` in the live probe).
+
+- **Session 0 isolation (default)**: omitting `in_session` and `session_id` moves a duplicate of the logged-on user's primary token into Session 0 so background tasks (`git`, builds, scripts) never flash windows, steal focus, or show a busy cursor on the interactive desktop.
+- **In-session silent mode**: set `in_session=True` or pass an explicit `session_id` to keep the process inside the user's WTS session while still hiding windows (`CREATE_NO_WINDOW`, `SW_HIDE`, `STARTF_FORCEOFFFEEDBACK`) and suppressing GUI credential prompts (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, `SSH_ASKPASS_REQUIRE=never`).
+- **Local Administrator elevation**: set `admin=True` to obtain the elevated High-integrity linked token when UAC split-token is active.
+- **Force logon**: provide `username` and `password` to authenticate a non-logged-in local user or `Administrator` via `LogonUserW` and `LoadUserProfileW`.

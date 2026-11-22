@@ -218,6 +218,55 @@ class Remote(SessionRemote):
         result["script_cleanup"] = cleanup
         return result
 
+    def run_as_user(self, command: str, username: str | None = None,
+                    session_id: int | None = None, active: bool = False,
+                    admin: bool = False, in_session: bool = False,
+                    password: str | None = None, timeout: float = 30,
+                    encoding: str | None = None) -> dict:
+        if not isinstance(command, str) or not command.strip() or "\0" in command:
+            raise ValueError("command must be nonempty text without NUL")
+        if len(command.encode("utf-8")) > 14000:
+            raise ValueError("command exceeds su inline limit (14000 bytes)")
+        if not 0 < timeout <= 300:
+            raise ValueError("timeout must be between 0 and 300 seconds")
+        codec = encoding or self.settings.encoding
+        codecs.lookup(codec)
+        if session_id is not None and not 0 < session_id < 0xFFFFFFFF:
+            raise ValueError("session_id must be a positive Windows Session ID")
+        if password is not None:
+            if not username or not username.strip():
+                raise ValueError("username is required when password is provided")
+            if session_id is not None:
+                raise ValueError("session_id cannot be combined with password force-logon")
+            if any(c in password for c in ("\0", "\r", "\n", '"')):
+                raise ValueError("password cannot contain quotes or control newlines")
+        if username is not None:
+            if not username.strip() or any(c in username for c in ("\0", "\r", "\n", '"')):
+                raise ValueError("invalid username")
+        if username and session_id is not None:
+            raise ValueError("specify either username or session_id, not both")
+        use_active = active or (username is None and session_id is None)
+        parts = ["su"]
+        if admin:
+            parts.append("--admin")
+        if in_session and session_id is None and password is None:
+            parts.append("--in-session")
+        if password is not None:
+            parts.append("-p")
+            parts.append(f'"{password}"')
+        if session_id is not None:
+            parts.extend(["--session", str(session_id)])
+        elif username:
+            parts.append(f'"{username}"' if any(c in username for c in (" ", "\t")) else username)
+        elif use_active:
+            parts.append("--active")
+        parts.append(command)
+        su_command = " ".join(parts)
+        context = self.probe()
+        if not context.get("user_switch"):
+            raise RuntimeError("Upgrade the remote EXE to support user switching (su)")
+        return self.result(self.exchange(command=su_command, timeout=timeout), context, codec)
+
     def session_screenshot(self, session_id: int, expected_user: str | None = None) -> tuple[bytes, dict]:
         if not 0 < session_id < 0xFFFFFFFF:
             raise ValueError("session_id must be a positive Windows Session ID")
@@ -452,13 +501,29 @@ def create_server(remote: Remote) -> FastMCP:
                             timeout: float = 30, encoding: str | None = None) -> dict:
         """Upload a long script into a private directory, execute it, then clean up.
 
-        runtime is powershell, python, or node; python/node need an absolute program.
+        runtime is powershell, qjs (embedded QuickJS-ng), python, or node; python/node auto-resolve from probe.tools when program is omitted.
         Script content travels over SFTP; args, cwd, env and separate binary stdin
         use DBX2. Execution uses the SSH Windows token/session. Script limit 1 MiB,
         stdin 256 KiB, output 1 MiB, timeout 300 seconds. script_cleanup reports
         removal or leftover directory/error. Commands are never automatically retried.
         """
         return remote.run_script(script, runtime, program, args, cwd, env, stdin_base64, timeout, encoding)
+
+    @server.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+    def dropbear_run_as_user(command: str, username: str | None = None,
+                             session_id: int | None = None, active: bool = False,
+                             admin: bool = False, in_session: bool = False,
+                             password: str | None = None, timeout: float = 30,
+                             encoding: str | None = None) -> dict:
+        """Run a command silently as a Windows user (with their profile, HKCU, git/SSH credentials).
+
+        By default runs in Session 0 (100% isolated from the user's desktop: no window flash,
+        no focus steal, no busy cursor). Set in_session=True or pass session_id to run silently
+        inside that user's actual WTS session (still hidden via CREATE_NO_WINDOW/SW_HIDE).
+        Set admin=True to elevate UAC split tokens to High-integrity Local Administrator.
+        Pass password + username to force-logon a local user/Administrator even when not logged in.
+        """
+        return remote.run_as_user(command, username, session_id, active, admin, in_session, password, timeout, encoding)
 
     @server.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
     def dropbear_desktop_launch(program: str, args: list[str] | None = None,
