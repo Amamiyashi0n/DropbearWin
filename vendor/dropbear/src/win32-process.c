@@ -1508,6 +1508,12 @@ int dropbear_win_spawn_shell(const char *command, const char *ssh_user,
 			!strcmp(command, "__dropbear_win_guide__") ? L"--dropbear-win-guide" :
 			!strcmp(command, "__dropbear_win_exec__") ? L"--dropbear-win-exec" : L"--dropbear-win-sftp", NULL);
 		internal_mode = 1;
+	} else if (dropbear_win_is_su_command(command)) {
+		if (!GetModuleFileNameW(NULL, executable, MAX_PATH)) goto fail;
+		application = executable;
+		command_line = make_internal_command_line(executable,
+			L"--dropbear-win-su", command);
+		internal_mode = 1;
 	} else if (dropbear_win_is_qjs_command(command)) {
 		if (!GetModuleFileNameW(NULL, executable, MAX_PATH)) goto fail;
 		application = executable;

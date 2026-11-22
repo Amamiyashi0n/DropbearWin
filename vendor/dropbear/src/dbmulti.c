@@ -113,6 +113,7 @@ void dropbear_win_agent_banner(char *output, size_t size) {
 		"  - Long commands: up to 64 KB per SSH exec (automatically bypasses Windows 8 KB cmd.exe limit)\r\n"
 		"  - Built-in JS runtime: `qjs -e \"<code>\"` or `qjs -` (QuickJS-ng ES2023, reads stdin)\r\n"
 		"  - Live PATH: System + User PATH refreshed automatically on every connection\r\n"
+		"  - User switch: `su --list`, `su <user> <cmd>`, `su --active <cmd>` (runs as logged-on user with their profile/git/ssh credentials)\r\n"
 		"Available tools on this host:\r\n"
 		"  %s\r\n"
 		"Read-only diagnostic commands (same SSH host/user/port):\r\n"
@@ -346,6 +347,14 @@ static int run_native_internal(int argc, char **argv) {
 	}
 	if (argc >= 2 && !strcmp(argv[1], "--qjs")) {
 		return dropbear_win_qjs_main(argc - 1, argv + 1);
+	}
+	if (argc == 3 && !strcmp(argv[1], "--dropbear-win-su")) {
+		char *command = decode_hex_command(argv[2]);
+		int result;
+		if (!command) return 2;
+		result = dropbear_win_su_exec_command(command);
+		m_free(command);
+		return result;
 	}
 	if (argc == 3 && !strcmp(argv[1], "--dropbear-win-qjs")) {
 		char *command = decode_hex_command(argv[2]);

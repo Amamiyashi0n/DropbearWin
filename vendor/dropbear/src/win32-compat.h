@@ -243,6 +243,8 @@ int dropbear_win_system_query(const char *command);
 wchar_t *dropbear_win_build_merged_path(const wchar_t *inherited_path);
 void dropbear_win_print_tools_json(FILE *stream);
 void dropbear_win_format_tools_summary(char *output, size_t output_size, const wchar_t *search_path);
+int dropbear_win_is_su_command(const char *command);
+int dropbear_win_su_exec_command(const char *command);
 int dropbear_win_qjs_main(int argc, char **argv);
 int dropbear_win_is_qjs_command(const char *command);
 int dropbear_win_qjs_exec_command(const char *command);
