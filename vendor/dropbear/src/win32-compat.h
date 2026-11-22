@@ -240,6 +240,9 @@ void dropbear_win_resource_summary(char *output, size_t size);
 void dropbear_win_windows_version(char *output, size_t size);
 int dropbear_win_is_system_query(const char *command);
 int dropbear_win_system_query(const char *command);
+int dropbear_win_qjs_main(int argc, char **argv);
+int dropbear_win_is_qjs_command(const char *command);
+int dropbear_win_qjs_exec_command(const char *command);
 int dropbear_win_script_directory(const char *id, int create, char *output, size_t size);
 void dropbear_win_runtime_security(char *identity, size_t identity_size,
 	char *token_text, size_t token_size, DWORD *session_id);

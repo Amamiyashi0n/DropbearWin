@@ -110,7 +110,7 @@ server instructions tell the Agent to discover context first.
 
 `dropbear_run_script` uploads script text through SFTP, then runs the interpreter
 through DBX2. Script bytes are stored in a file, and stdin remains available to
-the running script. Supported runtimes are `powershell`, `python`, and `node`.
+the running script. Supported runtimes are `powershell`, `qjs` (built-in QuickJS-ng ES2023; requires `qjs=true` in probe, no external `program` needed, exposes `std`, `os`, and `db` helpers), `python`, and `node`.
 PowerShell defaults to the server's Windows PowerShell path and receives a
 UTF-8 BOM script with process-scoped `-ExecutionPolicy Bypass`. Python and Node
 require an absolute `program` path to the installed interpreter. `args` contains

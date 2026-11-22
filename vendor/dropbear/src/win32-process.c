@@ -2,6 +2,9 @@
 #include "win-account.h"
 #include "session.h"
 #include <wtsapi32.h>
+#include <sddl.h>
+
+#define CMD_SAFE_LINE_LIMIT 8000
 
 struct process_entry {
 	DWORD pid;
@@ -9,6 +12,7 @@ struct process_entry {
 	HANDLE job;
 	HANDLE exit_wait;
 	int notify_fd;
+	wchar_t *temp_script;
 };
 
 /* A dedicated helper handles one request. DBX1 fields are UTF-8, DBX2 fields
@@ -656,7 +660,7 @@ static VOID CALLBACK notify_process_exit(PVOID context, BOOLEAN timed_out) {
 	dropbear_win_write(entry->notify_fd, &byte, 1);
 }
 
-static int register_process(HANDLE process, DWORD pid, HANDLE job) {
+static int register_process(HANDLE process, DWORD pid, HANDLE job, wchar_t *temp_script) {
 	unsigned int i;
 	ensure_process_table();
 	EnterCriticalSection(&process_lock);
@@ -665,6 +669,7 @@ static int register_process(HANDLE process, DWORD pid, HANDLE job) {
 			processes[i].process = process;
 			processes[i].pid = pid;
 			processes[i].job = job;
+			processes[i].temp_script = temp_script;
 			if (job) {
 				processes[i].notify_fd = ses.signal_pipe[1];
 				if (!RegisterWaitForSingleObject(&processes[i].exit_wait, process,
@@ -983,6 +988,428 @@ fail:
 	return NULL;
 }
 
+
+static LONG temp_script_counter = 0;
+
+static int create_temp_script_file(const wchar_t *extension, const void *data,
+		DWORD size, wchar_t **path_out) {
+	HANDLE token = NULL;
+	TOKEN_USER *user = NULL;
+	LPWSTR sid = NULL;
+	PSECURITY_DESCRIPTOR descriptor = NULL;
+	SECURITY_ATTRIBUTES security = {sizeof(security), NULL, FALSE};
+	wchar_t acl[256];
+	wchar_t temp_dir[MAX_PATH];
+	wchar_t *path = NULL;
+	HANDLE file = INVALID_HANDLE_VALUE;
+	DWORD token_size = 0, len, attempt;
+	const unsigned char *bytes = (const unsigned char *)data;
+	DWORD remaining = size;
+
+	*path_out = NULL;
+	len = GetTempPathW(MAX_PATH, temp_dir);
+	if (!len || len >= MAX_PATH - 48) return 0;
+
+	if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+		GetTokenInformation(token, TokenUser, NULL, 0, &token_size);
+		if (token_size) {
+			user = HeapAlloc(GetProcessHeap(), 0, token_size);
+			if (user && GetTokenInformation(token, TokenUser, user, token_size, &token_size) &&
+					ConvertSidToStringSidW(user->User.Sid, &sid)) {
+				if (_snwprintf(acl, sizeof(acl) / sizeof(acl[0]),
+						L"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;%ls)", sid) > 0) {
+					if (ConvertStringSecurityDescriptorToSecurityDescriptorW(acl,
+							SDDL_REVISION_1, &descriptor, NULL)) {
+						security.lpSecurityDescriptor = descriptor;
+					}
+				}
+			}
+		}
+	}
+
+	path = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, MAX_PATH * sizeof(*path));
+	if (!path) goto fail;
+
+	for (attempt = 0; attempt < 32; attempt++) {
+		LONG seq = InterlockedIncrement(&temp_script_counter);
+		if (_snwprintf(path, MAX_PATH, L"%lsdropbear-cmd-%lu-%ld-%lu.%ls",
+				temp_dir, (unsigned long)GetCurrentProcessId(), (long)seq,
+				(unsigned long)(GetTickCount() ^ (attempt * 2654435761UL)), extension) <= 0)
+			goto fail;
+		file = CreateFileW(path, GENERIC_WRITE, 0,
+			security.lpSecurityDescriptor ? &security : NULL,
+			CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY, NULL);
+		if (file != INVALID_HANDLE_VALUE) break;
+		if (GetLastError() != ERROR_FILE_EXISTS) goto fail;
+	}
+	if (file == INVALID_HANDLE_VALUE) goto fail;
+
+	while (remaining > 0) {
+		DWORD written = 0;
+		if (!WriteFile(file, bytes, remaining, &written, NULL) || written == 0) goto fail;
+		bytes += written;
+		remaining -= written;
+	}
+	CloseHandle(file);
+	file = INVALID_HANDLE_VALUE;
+	*path_out = path;
+	path = NULL;
+
+fail:
+	if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+	if (path) {
+		DeleteFileW(path);
+		HeapFree(GetProcessHeap(), 0, path);
+	}
+	if (descriptor) LocalFree(descriptor);
+	if (sid) LocalFree(sid);
+	if (user) HeapFree(GetProcessHeap(), 0, user);
+	if (token) CloseHandle(token);
+	return *path_out != NULL;
+}
+
+static int has_suffix_ci(const wchar_t *text, const wchar_t *suffix) {
+	size_t tlen = wcslen(text), slen = wcslen(suffix);
+	if (tlen < slen) return 0;
+	return _wcsicmp(text + tlen - slen, suffix) == 0;
+}
+
+/* If a long single-line command directly invokes an external .exe without CMD
+ * shell syntax, bypass cmd.exe (8191-char limit) and launch via CreateProcessW
+ * (32767-char limit). */
+static int try_resolve_direct_executable(const wchar_t *command,
+		wchar_t *resolved, DWORD resolved_cap) {
+	const wchar_t *p = command;
+	wchar_t token[MAX_PATH];
+	size_t token_len = 0;
+	int in_quotes = 0;
+	DWORD found, attrs;
+
+	if (!command || !command[0] || wcslen(command) >= 32767) return 0;
+
+	/* Reject any CMD metacharacters or multiline content. */
+	for (; *p; p++) {
+		wchar_t c = *p;
+		if (c == L'\r' || c == L'\n' || c == L'%') return 0;
+		if (c == L'"') {
+			in_quotes = !in_quotes;
+			continue;
+		}
+		if (!in_quotes) {
+			if (c == L'&' || c == L'|' || c == L'<' || c == L'>' ||
+					c == L'^' || c == L'(' || c == L')' || c == L'!') {
+				return 0;
+			}
+		}
+	}
+	if (in_quotes) return 0;
+
+	/* Extract the first token (executable name/path). */
+	p = command;
+	while (*p == L' ' || *p == L'\t') p++;
+	if (!*p) return 0;
+	if (*p == L'"') {
+		p++;
+		while (*p && *p != L'"') {
+			if (token_len + 1 >= MAX_PATH) return 0;
+			token[token_len++] = *p++;
+		}
+		if (*p != L'"') return 0;
+	} else {
+		while (*p && *p != L' ' && *p != L'\t') {
+			if (token_len + 1 >= MAX_PATH) return 0;
+			token[token_len++] = *p++;
+		}
+	}
+	token[token_len] = L'\0';
+	if (!token_len) return 0;
+
+	/* Never bypass cmd.exe for batch/script files. */
+	if (has_suffix_ci(token, L".bat") || has_suffix_ci(token, L".cmd") ||
+			has_suffix_ci(token, L".vbs") || has_suffix_ci(token, L".js") ||
+			has_suffix_ci(token, L".ps1")) {
+		return 0;
+	}
+
+	found = SearchPathW(NULL, token, L".exe", resolved_cap, resolved, NULL);
+	if (!found || found >= resolved_cap) return 0;
+	if (!has_suffix_ci(resolved, L".exe") && !has_suffix_ci(resolved, L".com")) return 0;
+	attrs = GetFileAttributesW(resolved);
+	if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) return 0;
+	return 1;
+}
+
+static int append_wide_buf(wchar_t **buf, size_t *used, size_t *cap,
+		const wchar_t *text, size_t len) {
+	if (*used + len + 1 > *cap) {
+		size_t next = *cap ? *cap * 2 : 16384;
+		wchar_t *grown;
+		while (next < *used + len + 1) next *= 2;
+		grown = *buf
+			? HeapReAlloc(GetProcessHeap(), 0, *buf, next * sizeof(*grown))
+			: HeapAlloc(GetProcessHeap(), 0, next * sizeof(*grown));
+		if (!grown) return 0;
+		*buf = grown;
+		*cap = next;
+	}
+	if (len) memcpy(*buf + *used, text, len * sizeof(*text));
+	*used += len;
+	(*buf)[*used] = L'\0';
+	return 1;
+}
+
+static int is_safe_echo_char(wchar_t c) {
+	return (c >= L'A' && c <= L'Z') || (c >= L'a' && c <= L'z') ||
+		(c >= L'0' && c <= L'9') || c == L'+' || c == L'/' || c == L'=' ||
+		c == L'-' || c == L'_' || c == L'.' || c == L',' || c == L':' ||
+		c == L'@' || c == L'~';
+}
+
+/* Split a single >8KB safe-character `echo <payload> [>|>> target]` line into
+ * <4KB chunks using leading redirection (`>target <nul set /p "=chunk"` and
+ * `>>target echo.chunkLast`) so cmd.exe never hits its 8191-char line limit. */
+static int try_append_split_echo(wchar_t **buf, size_t *used, size_t *cap,
+		const wchar_t *line, size_t len) {
+	const wchar_t *p = line, *end = line + len;
+	const wchar_t *payload, *payload_end;
+	const wchar_t *redir = NULL, *target = NULL, *target_end = NULL;
+	int append_mode = 0;
+	size_t i, payload_len, offset = 0;
+
+	while (p < end && (*p == L' ' || *p == L'\t')) p++;
+	if ((size_t)(end - p) < 5) return 0;
+	if (_wcsnicmp(p, L"echo", 4) != 0) return 0;
+	if (p[4] != L' ' && p[4] != L'\t' && p[4] != L'.') return 0;
+	p += 5;
+	if (p[-1] != L'.') {
+		while (p < end && (*p == L' ' || *p == L'\t')) p++;
+	}
+	if (p >= end) return 0;
+	payload = p;
+
+	/* Locate optional trailing > or >> redirection outside quotes. */
+	{
+		const wchar_t *q;
+		int in_q = 0;
+		for (q = payload; q < end; q++) {
+			if (*q == L'"') { in_q = !in_q; continue; }
+			if (!in_q && *q == L'>') { redir = q; break; }
+		}
+	}
+	if (redir) {
+		payload_end = redir;
+		while (payload_end > payload && (payload_end[-1] == L' ' || payload_end[-1] == L'\t'))
+			payload_end--;
+		if (redir + 1 < end && redir[1] == L'>') {
+			append_mode = 1;
+			target = redir + 2;
+		} else {
+			append_mode = 0;
+			target = redir + 1;
+		}
+		while (target < end && (*target == L' ' || *target == L'\t')) target++;
+		target_end = end;
+		while (target_end > target && (target_end[-1] == L' ' || target_end[-1] == L'\t'))
+			target_end--;
+		if (target >= target_end || (size_t)(target_end - target) > 1024) return 0;
+		for (i = 0; i < (size_t)(target_end - target); i++) {
+			wchar_t c = target[i];
+			if (c == L'&' || c == L'|' || c == L'<' || c == L'>' ||
+					c == L'%' || c == L'!' || c == L'^' || c == L'\r' || c == L'\n')
+				return 0;
+		}
+	} else {
+		payload_end = end;
+		while (payload_end > payload && (payload_end[-1] == L' ' || payload_end[-1] == L'\t'))
+			payload_end--;
+	}
+
+	payload_len = (size_t)(payload_end - payload);
+	if (payload_len == 0) return 0;
+	for (i = 0; i < payload_len; i++) {
+		if (!is_safe_echo_char(payload[i])) return 0;
+	}
+
+	while (offset < payload_len) {
+		size_t remain = payload_len - offset;
+		size_t chunk = remain > 4000 ? 4000 : remain;
+		int is_last;
+		/* Avoid starting a set /p chunk with '='; shrink slightly if needed. */
+		if (chunk < remain) {
+			while (chunk > 1 && payload[offset + chunk] == L'=') chunk--;
+		}
+		is_last = (offset + chunk >= payload_len);
+		if (target) {
+			const wchar_t *op = (offset == 0 && !append_mode) ? L">" : L">>";
+			if (!append_wide_buf(buf, used, cap, op, wcslen(op)) ||
+					!append_wide_buf(buf, used, cap, target, (size_t)(target_end - target)) ||
+					!append_wide_buf(buf, used, cap, L" ", 1))
+				return 0;
+		}
+		if (!is_last) {
+			if (payload[offset] == L'=') return 0;
+			if (!append_wide_buf(buf, used, cap, L"<nul set /p \"=", 14) ||
+					!append_wide_buf(buf, used, cap, payload + offset, chunk) ||
+					!append_wide_buf(buf, used, cap, L"\"\r\n", 3))
+				return 0;
+		} else {
+			if (!append_wide_buf(buf, used, cap, L"echo.", 5) ||
+					!append_wide_buf(buf, used, cap, payload + offset, chunk) ||
+					!append_wide_buf(buf, used, cap, L"\r\n", 2))
+				return 0;
+		}
+		offset += chunk;
+	}
+	return 1;
+}
+
+static int append_cmd_segment(wchar_t **buf, size_t *used, size_t *cap,
+		const wchar_t *seg, size_t len) {
+	while (len > 0 && (*seg == L' ' || *seg == L'\t')) { seg++; len--; }
+	while (len > 0 && (seg[len - 1] == L' ' || seg[len - 1] == L'\t')) len--;
+	if (len == 0) return 1;
+	if (len > CMD_SAFE_LINE_LIMIT && try_append_split_echo(buf, used, cap, seg, len))
+		return 1;
+	return append_wide_buf(buf, used, cap, seg, len) &&
+		append_wide_buf(buf, used, cap, L"\r\n", 2);
+}
+
+/* Convert a long or multi-line CMD command into a .cmd batch script, splitting
+ * top-level & / && chains on >8KB lines so cmd.exe stays within its 8191-char
+ * per-line buffer. */
+static wchar_t *build_cmd_batch_script(const wchar_t *wide_command) {
+	wchar_t *buf = NULL;
+	size_t used = 0, cap = 0;
+	const wchar_t *p = wide_command;
+
+	while (*p) {
+		const wchar_t *line_start = p;
+		size_t line_len;
+		while (*p && *p != L'\r' && *p != L'\n') p++;
+		line_len = (size_t)(p - line_start);
+		if (*p == L'\r' && p[1] == L'\n') p += 2;
+		else if (*p == L'\r' || *p == L'\n') p++;
+
+		if (line_len <= CMD_SAFE_LINE_LIMIT) {
+			if (!append_wide_buf(&buf, &used, &cap, line_start, line_len) ||
+					!append_wide_buf(&buf, &used, &cap, L"\r\n", 2))
+				goto fail;
+			continue;
+		}
+
+		/* Split top-level unquoted & and && operators into separate lines. */
+		{
+			const wchar_t *seg = line_start;
+			const wchar_t *cur = line_start;
+			const wchar_t *line_end = line_start + line_len;
+			int in_q = 0, paren_depth = 0;
+			while (cur < line_end) {
+				wchar_t c = *cur;
+				if (!in_q && c == L'^' && cur + 1 < line_end) {
+					cur += 2;
+					continue;
+				}
+				if (c == L'"') {
+					in_q = !in_q;
+					cur++;
+					continue;
+				}
+				if (!in_q) {
+					if (c == L'(') { paren_depth++; cur++; continue; }
+					if (c == L')' && paren_depth > 0) { paren_depth--; cur++; continue; }
+					if (paren_depth == 0 && c == L'&') {
+						/* Ignore redirections like 2>&1 or <&0. */
+						int is_redir = (cur > line_start && (cur[-1] == L'>' || cur[-1] == L'<'));
+						if (!is_redir) {
+							int is_and_and = (cur + 1 < line_end && cur[1] == L'&');
+							if (!append_cmd_segment(&buf, &used, &cap, seg, (size_t)(cur - seg)))
+								goto fail;
+							if (is_and_and) {
+								const wchar_t *guard = L"if errorlevel 1 exit /b %errorlevel%\r\n";
+								if (!append_wide_buf(&buf, &used, &cap, guard, wcslen(guard)))
+									goto fail;
+								cur += 2;
+							} else {
+								cur += 1;
+							}
+							seg = cur;
+							continue;
+						}
+					}
+				}
+				cur++;
+			}
+			if (!append_cmd_segment(&buf, &used, &cap, seg, (size_t)(line_end - seg)))
+				goto fail;
+		}
+	}
+	if (!buf) {
+		if (!append_wide_buf(&buf, &used, &cap, L"", 0)) goto fail;
+	}
+	return buf;
+fail:
+	if (buf) HeapFree(GetProcessHeap(), 0, buf);
+	return NULL;
+}
+
+static int write_cmd_temp_script(const wchar_t *wide_command, wchar_t **path_out) {
+	wchar_t *body = build_cmd_batch_script(wide_command);
+	wchar_t *full = NULL;
+	char *encoded = NULL;
+	BOOL used_default = FALSE;
+	UINT cp = GetOEMCP();
+	int body_len, needed;
+	size_t full_len;
+	const wchar_t *header;
+	int ok = 0;
+
+	*path_out = NULL;
+	if (!body) return 0;
+	body_len = (int)wcslen(body);
+
+	/* Prefer OEM codepage when lossless; fall back to UTF-8 with chcp 65001. */
+	if (body_len > 0) {
+		int oem_len = WideCharToMultiByte(cp, WC_NO_BEST_FIT_CHARS, body, body_len,
+			NULL, 0, NULL, &used_default);
+		if (oem_len <= 0 || used_default) cp = CP_UTF8;
+	}
+	header = (cp == CP_UTF8) ? L"@echo off\r\n@chcp 65001 >nul\r\n" : L"@echo off\r\n";
+	full_len = wcslen(header) + (size_t)body_len + 1;
+	full = HeapAlloc(GetProcessHeap(), 0, full_len * sizeof(*full));
+	if (!full) goto done;
+	wcscpy(full, header);
+	wcscat(full, body);
+
+	needed = WideCharToMultiByte(cp, 0, full, (int)wcslen(full), NULL, 0, NULL, NULL);
+	if (needed < 0) goto done;
+	encoded = HeapAlloc(GetProcessHeap(), 0, (size_t)needed + 1);
+	if (!encoded) goto done;
+	if (needed > 0 && WideCharToMultiByte(cp, 0, full, (int)wcslen(full),
+			encoded, needed, NULL, NULL) != needed)
+		goto done;
+	ok = create_temp_script_file(L"cmd", encoded, (DWORD)needed, path_out);
+
+done:
+	if (encoded) HeapFree(GetProcessHeap(), 0, encoded);
+	if (full) HeapFree(GetProcessHeap(), 0, full);
+	HeapFree(GetProcessHeap(), 0, body);
+	return ok;
+}
+
+static int write_ps1_temp_script(const char *utf8_command, wchar_t **path_out) {
+	size_t len = strlen(utf8_command);
+	unsigned char *buf = HeapAlloc(GetProcessHeap(), 0, len + 3);
+	int ok;
+	*path_out = NULL;
+	if (!buf) return 0;
+	/* UTF-8 BOM ensures Windows PowerShell 5.1 reads UTF-8 scripts reliably. */
+	buf[0] = 0xEF; buf[1] = 0xBB; buf[2] = 0xBF;
+	memcpy(buf + 3, utf8_command, len);
+	ok = create_temp_script_file(L"ps1", buf, (DWORD)(len + 3), path_out);
+	HeapFree(GetProcessHeap(), 0, buf);
+	return ok;
+}
+
 int dropbear_win_spawn_shell(const char *command, const char *ssh_user,
 		const char *terminal, const char *connection,
 		int *writefd, int *readfd, int *errfd, pid_t *pid) {
@@ -1001,9 +1428,11 @@ int dropbear_win_spawn_shell(const char *command, const char *ssh_user,
 	wchar_t windows_dir[MAX_PATH];
 	wchar_t shell[MAX_PATH];
 	wchar_t executable[MAX_PATH];
+	wchar_t resolved_exe[MAX_PATH];
 	const wchar_t *application = shell;
 	wchar_t *wide_command = NULL;
 	wchar_t *command_line = NULL;
+	wchar_t *temp_script = NULL;
 	wchar_t *environment = NULL;
 	size_t command_line_len;
 	BOOL created;
@@ -1055,6 +1484,12 @@ int dropbear_win_spawn_shell(const char *command, const char *ssh_user,
 			!strcmp(command, "__dropbear_win_guide__") ? L"--dropbear-win-guide" :
 			!strcmp(command, "__dropbear_win_exec__") ? L"--dropbear-win-exec" : L"--dropbear-win-sftp", NULL);
 		internal_mode = 1;
+	} else if (dropbear_win_is_qjs_command(command)) {
+		if (!GetModuleFileNameW(NULL, executable, MAX_PATH)) goto fail;
+		application = executable;
+		command_line = make_internal_command_line(executable,
+			L"--dropbear-win-qjs", command);
+		internal_mode = 1;
 	} else if (dropbear_win_is_system_query(command)) {
 		if (!GetModuleFileNameW(NULL, executable, MAX_PATH)) goto fail;
 		application = executable;
@@ -1099,15 +1534,49 @@ int dropbear_win_spawn_shell(const char *command, const char *ssh_user,
 			HeapFree(GetProcessHeap(), 0, wide_command);
 			wide_command = encoded_wide;
 		}
-		command_line_len = wcslen(shell) + wcslen(wide_command) + 128;
-		command_line = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-			command_line_len * sizeof(*command_line));
-		if (!command_line) goto fail;
 		if (wcsstr(shell, L"powershell.exe")) {
-			_snwprintf(command_line, command_line_len, command && command[0]
-				? L"\"%ls\" -NoLogo -NoProfile -NonInteractive -EncodedCommand %ls"
-				: L"\"%ls\" -NoLogo -NoProfile", shell, wide_command);
+			command_line_len = wcslen(shell) + wcslen(wide_command) + 128;
+			if (command && command[0] && command_line_len >= 32767) {
+				if (!write_ps1_temp_script(command, &temp_script)) goto fail;
+				command_line_len = wcslen(shell) + wcslen(temp_script) + 128;
+				command_line = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+					command_line_len * sizeof(*command_line));
+				if (!command_line) goto fail;
+				_snwprintf(command_line, command_line_len,
+					L"\"%ls\" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%ls\"",
+					shell, temp_script);
+			} else {
+				command_line = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+					command_line_len * sizeof(*command_line));
+				if (!command_line) goto fail;
+				_snwprintf(command_line, command_line_len, command && command[0]
+					? L"\"%ls\" -NoLogo -NoProfile -NonInteractive -EncodedCommand %ls"
+					: L"\"%ls\" -NoLogo -NoProfile", shell, wide_command);
+			}
+		} else if (command && command[0] &&
+				(wcslen(shell) + wcslen(wide_command) + 12 > CMD_SAFE_LINE_LIMIT ||
+				 wcschr(wide_command, L'\r') || wcschr(wide_command, L'\n'))) {
+			if (try_resolve_direct_executable(wide_command, resolved_exe, MAX_PATH)) {
+				application = resolved_exe;
+				command_line_len = wcslen(wide_command) + 1;
+				command_line = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+					command_line_len * sizeof(*command_line));
+				if (!command_line) goto fail;
+				wcscpy(command_line, wide_command);
+			} else {
+				if (!write_cmd_temp_script(wide_command, &temp_script)) goto fail;
+				command_line_len = wcslen(shell) + wcslen(temp_script) + 32;
+				command_line = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+					command_line_len * sizeof(*command_line));
+				if (!command_line) goto fail;
+				_snwprintf(command_line, command_line_len,
+					L"\"%ls\" /d /c \"%ls\"", shell, temp_script);
+			}
 		} else {
+			command_line_len = wcslen(shell) + wcslen(wide_command) + 128;
+			command_line = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+				command_line_len * sizeof(*command_line));
+			if (!command_line) goto fail;
 			_snwprintf(command_line, command_line_len, command && command[0]
 				? L"\"%ls\" /d /s /c \"%ls\""
 				: L"\"%ls\" /d /q", shell, wide_command);
@@ -1170,7 +1639,8 @@ int dropbear_win_spawn_shell(const char *command, const char *ssh_user,
 			transcode_terminal ? shell_codepage : 0,
 			transcode_terminal ? CP_UTF8 : 0)) goto fail_process;
 	stderr_read = NULL; error_sockets[1] = -1;
-	if (register_process(process.hProcess, process.dwProcessId, job) != 0) goto fail_process;
+	if (register_process(process.hProcess, process.dwProcessId, job, temp_script) != 0) goto fail_process;
+	temp_script = NULL;
 	*writefd = input_sockets[0];
 	*readfd = output_sockets[0];
 	if (errfd) *errfd = error_sockets[0];
@@ -1200,6 +1670,7 @@ fail:
 	if (stdout_write) CloseHandle(stdout_write);
 	if (stderr_read) CloseHandle(stderr_read);
 	if (stderr_write) CloseHandle(stderr_write);
+	if (temp_script) { DeleteFileW(temp_script); HeapFree(GetProcessHeap(), 0, temp_script); }
 	if (wide_command) HeapFree(GetProcessHeap(), 0, wide_command);
 	if (command_line) HeapFree(GetProcessHeap(), 0, command_line);
 	return -1;
@@ -1267,7 +1738,7 @@ int dropbear_win_spawn_connection(int socket_fd, int auth_fd, int argc, char **a
 		dropbear_win_export_socket(auth_fd, process.dwProcessId, &payload.auth_info) != 0 ||
 		!WriteFile(parent_write, &payload, sizeof(payload), &written, NULL) ||
 		written != sizeof(payload) || ResumeThread(process.hThread) == (DWORD)-1 ||
-		register_process(process.hProcess, process.dwProcessId, NULL) != 0) {
+		register_process(process.hProcess, process.dwProcessId, NULL, NULL) != 0) {
 		TerminateProcess(process.hProcess, 1);
 		CloseHandle(process.hThread);
 		CloseHandle(process.hProcess);
@@ -1338,6 +1809,10 @@ pid_t dropbear_win_waitpid(pid_t requested_pid, int *status, int options) {
 		 * command exits so inherited output handles cannot hold EOF forever. */
 		if (processes[i].job) CloseHandle(processes[i].job);
 		CloseHandle(processes[i].process);
+		if (processes[i].temp_script) {
+			DeleteFileW(processes[i].temp_script);
+			HeapFree(GetProcessHeap(), 0, processes[i].temp_script);
+		}
 		requested_pid = (pid_t)processes[i].pid;
 		memset(&processes[i], 0, sizeof(processes[i]));
 		LeaveCriticalSection(&process_lock);
@@ -1383,6 +1858,10 @@ void dropbear_win_process_cleanup(void) {
 		else TerminateProcess(processes[i].process, 1);
 		WaitForSingleObject(processes[i].process, 3000);
 		CloseHandle(processes[i].process);
+		if (processes[i].temp_script) {
+			DeleteFileW(processes[i].temp_script);
+			HeapFree(GetProcessHeap(), 0, processes[i].temp_script);
+		}
 		memset(&processes[i], 0, sizeof(processes[i]));
 	}
 	LeaveCriticalSection(&process_lock);

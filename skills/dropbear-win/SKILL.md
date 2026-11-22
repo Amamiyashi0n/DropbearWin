@@ -81,7 +81,7 @@ the byte-preserving `dropbear-exec-v1` subsystem, avoiding shell quoting.
 Use `dropbear_run_command` when shell syntax is needed, following the live
 `shell` value (`cmd` or `powershell`, without POSIX assumptions).
 
-Use `dropbear_run_script` for long PowerShell, Python, or Node scripts. Pass
+Use `dropbear_run_script` for long PowerShell, embedded QuickJS-ng (`qjs`), Python, or Node scripts. `qjs` requires no external interpreter (check `qjs=true` in the probe; provides globals `std`, `os`, and `db` with file/JSON/Base64/stdin helpers) and can also run directly via SSH `qjs -e ...` or `qjs -`. Pass
 `script` as text, `runtime`, script `args`, and an absolute interpreter `program`
 for Python/Node. It stages the file over SFTP in a private directory and uses
 structured exec with separate `stdin_base64`, `cwd`, and `env`. It uses the SSH

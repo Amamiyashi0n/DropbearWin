@@ -153,7 +153,7 @@ static int print_agent_probe(void) {
 	fputs("\"identity_rule\":\"SSH user is a Dropbear authentication label; ordinary commands inherit the server process Windows token\","
 		"\"agent_guide_command\":\"__dropbear_win_guide__\","
 		"\"system_query_commands\":[\"uname\",\"sysinfo\",\"cpuinfo\",\"meminfo\",\"diskinfo\"],"
-		"\"script_staging\":true,"
+		"\"script_staging\":true,\"qjs\":true,"
 		"\"desktop_launch\":{\"command\":\"--desktop-launch\","
 		"\"target\":\"console-or-explicit-session\",\"token\":\"selected-session-user\","
 		"\"arbitrary_session\":true,\"session_option\":\"--session\",\"user_check_option\":\"--expect-user\","
@@ -337,6 +337,17 @@ static int run_native_internal(int argc, char **argv) {
 		print_json_string(powershell);
 		fputs("}\n", stdout);
 		return 0;
+	}
+	if (argc >= 2 && !strcmp(argv[1], "--qjs")) {
+		return dropbear_win_qjs_main(argc - 1, argv + 1);
+	}
+	if (argc == 3 && !strcmp(argv[1], "--dropbear-win-qjs")) {
+		char *command = decode_hex_command(argv[2]);
+		int result;
+		if (!command) return 2;
+		result = dropbear_win_qjs_exec_command(command);
+		m_free(command);
+		return result;
 	}
 	if (argc == 3 && !strcmp(argv[1], "--dropbear-win-system-query")) {
 		char *command = decode_hex_command(argv[2]);

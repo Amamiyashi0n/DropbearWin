@@ -88,7 +88,9 @@ typedef char dropbear_win_ident_length_check[(sizeof(LOCAL_IDENT "\r\n") - 1 <= 
  * the clearenv() function */
 #define ENV_SIZE 100
 
+#ifndef MAX_CMD_LEN
 #define MAX_CMD_LEN 9000 /* max length of a command */
+#endif
 #define MAX_TERM_LEN 200 /* max length of TERM name */
 
 #define MAX_HOST_LEN 254 /* max hostname len for tcp fwding */

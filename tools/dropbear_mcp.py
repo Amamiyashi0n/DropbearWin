@@ -135,15 +135,15 @@ class Remote(SessionRemote):
     def run_script(self, script: str, runtime: str = "powershell", program: str | None = None,
                    args: list[str] | None = None, cwd: str = "", env: dict[str, str] | None = None,
                    stdin_base64: str = "", timeout: float = 30, encoding: str | None = None) -> dict:
-        extensions = {"powershell": ".ps1", "python": ".py", "node": ".js"}
+        extensions = {"powershell": ".ps1", "python": ".py", "node": ".js", "qjs": ".js"}
         if runtime not in extensions:
-            raise ValueError("runtime must be powershell, python, or node")
+            raise ValueError("runtime must be powershell, python, node, or qjs")
         if not isinstance(script, str) or not script or "\0" in script:
             raise ValueError("script must be nonempty text without NUL")
         source = script.encode("utf-8-sig" if runtime == "powershell" else "utf-8")
         if len(source) > 1024 * 1024:
             raise ValueError("script is limited to 1 MiB; upload larger files separately")
-        if runtime != "powershell" and not program:
+        if runtime not in ("powershell", "qjs") and not program:
             raise ValueError("Provide the absolute interpreter program for python or node")
         request = validate_work("exec", {
             "program": program or r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
@@ -181,7 +181,15 @@ class Remote(SessionRemote):
             arguments = [filename] + request["args"]
             if runtime == "powershell":
                 arguments = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"] + arguments
-            payload = encode_request({"program": program or stage["powershell"], "args": arguments,
+                target_program = program or stage["powershell"]
+            elif runtime == "qjs":
+                if not context.get("qjs"):
+                    raise RuntimeError("Upgrade the remote EXE to support the embedded QuickJS-ng runtime")
+                arguments = ["--qjs", filename] + request["args"]
+                target_program = executable
+            else:
+                target_program = program
+            payload = encode_request({"program": target_program, "args": arguments,
                                       "cwd": cwd, "env": request["env"]}) + data
             result = self.result(self._exchange(client, payload=payload, timeout=timeout), context, codec)
         except Exception as exc:

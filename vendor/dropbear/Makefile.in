@@ -41,7 +41,7 @@ _COMMONOBJS=dbutil.o buffer.o dbhelpers.o \
 		dss.o bignum.o \
 		signkey.o rsa.o dbrandom.o \
 		queue.o \
-		win-account.o win32-compat.o win32-process.o win-sftp.o win-service.o win-agent-bundle.o win-resources.o win-port.o win-log.o win-script.o \
+		win-account.o win32-compat.o win32-process.o win-sftp.o win-service.o win-agent-bundle.o win-resources.o win-port.o win-log.o win-script.o win-qjs.o qjs-quickjs.o qjs-quickjs-libc.o qjs-dtoa.o qjs-libregexp.o qjs-libunicode.o \
 		atomicio.o compat.o fake-rfc2553.o \
 		ltc_prng.o ecc.o ecdsa.o sk-ecdsa.o crypto_desc.o \
 		curve25519.o ed25519.o sk-ed25519.o \
@@ -179,6 +179,27 @@ $(OBJ_DIR)/win-log.o: @srcdir@/../../src/windows/win-log.c $(HEADERS) | $(OBJ_DI
 
 $(OBJ_DIR)/win-script.o: @srcdir@/../../src/windows/win-script.c $(HEADERS) | $(OBJ_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(srcdir) -c $< -o $@
+
+QJS_DIR=@srcdir@/../quickjs-ng
+QJS_CFLAGS=$(CFLAGS) -DQJS_BUILD_LIBC -DCONFIG_VERSION=\"0.18.0\" -I$(QJS_DIR)
+
+$(OBJ_DIR)/win-qjs.o: @srcdir@/../../src/windows/win-qjs.c $(HEADERS) | $(OBJ_DIR)
+	$(CC) $(CPPFLAGS) $(QJS_CFLAGS) -I$(srcdir) -c $< -o $@
+
+$(OBJ_DIR)/qjs-quickjs.o: $(QJS_DIR)/quickjs.c | $(OBJ_DIR)
+	$(CC) $(CPPFLAGS) $(QJS_CFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/qjs-quickjs-libc.o: $(QJS_DIR)/quickjs-libc.c | $(OBJ_DIR)
+	$(CC) $(CPPFLAGS) $(QJS_CFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/qjs-dtoa.o: $(QJS_DIR)/dtoa.c | $(OBJ_DIR)
+	$(CC) $(CPPFLAGS) $(QJS_CFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/qjs-libregexp.o: $(QJS_DIR)/libregexp.c | $(OBJ_DIR)
+	$(CC) $(CPPFLAGS) $(QJS_CFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/qjs-libunicode.o: $(QJS_DIR)/libunicode.c | $(OBJ_DIR)
+	$(CC) $(CPPFLAGS) $(QJS_CFLAGS) -c $< -o $@
 
 # for simplicity assume all source depends on all headers
 HEADERS=$(wildcard $(srcdir)/*.h *.h) default_options_guard.h
