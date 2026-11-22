@@ -291,10 +291,8 @@ static int runas_execute(int mode_active, DWORD requested_session,
 			(unsigned long)chosen_session, (unsigned long)err);
 		goto done;
 	}
-	if (!DuplicateTokenEx(user_token, MAXIMUM_ALLOWED, NULL, SecurityIdentification, TokenPrimary, &primary_token)) {
-		fprintf(stderr, "su: DuplicateTokenEx failed: error %lu\n", (unsigned long)GetLastError());
-		goto done;
-	}
+	primary_token = user_token;
+	user_token = NULL;
 	if (!create_env(&env_block, primary_token, FALSE)) {
 		fprintf(stderr, "su: CreateEnvironmentBlock failed: error %lu\n", (unsigned long)GetLastError());
 		goto done;
@@ -326,12 +324,16 @@ static int runas_execute(int mode_active, DWORD requested_session,
 	}
 
 	si.cb = sizeof(si);
+	si.lpDesktop = L"winsta0\\default";
 	si.dwFlags = STARTF_USESTDHANDLES;
 	si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
 	si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
 	si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
 
 	if (!CreateProcessAsUserW(primary_token, shell, cmd_line, NULL, NULL, TRUE,
+			CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+			env_block, user_profile, &si, &pi) &&
+		!CreateProcessAsUserW(primary_token, shell, cmd_line, NULL, NULL, TRUE,
 			CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
 			env_block, user_profile, &si, &pi)) {
 		fprintf(stderr, "su: CreateProcessAsUserW failed: error %lu\n", (unsigned long)GetLastError());
