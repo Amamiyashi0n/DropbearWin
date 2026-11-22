@@ -197,6 +197,38 @@ static void try_elevate_linked_token(HANDLE *token_ptr) {
 	}
 }
 
+
+/* Append non-interactive defaults so background tools (git/GCM/ssh) never hang
+ * or attempt to show GUI prompts. Returns a HeapAlloc block; caller frees it. */
+static wchar_t *runas_augment_silent_env(const wchar_t *base_env) {
+	static const wchar_t *const extras[] = {
+		L"GIT_TERMINAL_PROMPT=0",
+		L"GCM_INTERACTIVE=never",
+		L"SSH_ASKPASS_REQUIRE=never"
+	};
+	const wchar_t *p;
+	size_t total = 2, i;
+	wchar_t *buf, *out;
+
+	for (p = base_env; *p; p += wcslen(p) + 1) total += wcslen(p) + 1;
+	for (i = 0; i < sizeof(extras) / sizeof(extras[0]); i++) total += wcslen(extras[i]) + 1;
+	buf = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, total * sizeof(*buf));
+	if (!buf) return NULL;
+	out = buf;
+	for (p = base_env; *p; p += wcslen(p) + 1) {
+		if (!_wcsnicmp(p, L"GIT_TERMINAL_PROMPT=", 20) ||
+			!_wcsnicmp(p, L"GCM_INTERACTIVE=", 16) ||
+			!_wcsnicmp(p, L"SSH_ASKPASS_REQUIRE=", 20)) continue;
+		wcscpy(out, p);
+		out += wcslen(out) + 1;
+	}
+	for (i = 0; i < sizeof(extras) / sizeof(extras[0]); i++) {
+		wcscpy(out, extras[i]);
+		out += wcslen(out) + 1;
+	}
+	return buf;
+}
+
 static int runas_execute(int mode_active, int want_admin, DWORD requested_session,
 		const char *target_user, const char *password_utf8, const char *command_utf8) {
 	typedef DWORD (WINAPI *active_session_fn)(void);
@@ -221,6 +253,7 @@ static int runas_execute(int mode_active, int want_admin, DWORD requested_sessio
 	DWORD chosen_session = 0xffffffffUL;
 	HANDLE primary_token = NULL;
 	LPVOID env_block = NULL;
+	wchar_t *silent_env = NULL;
 	DB_PROFILEINFOW profile_info;
 	int profile_loaded = 0;
 	int use_wts_desktop = 1;
@@ -425,19 +458,40 @@ static int runas_execute(int mode_active, int want_admin, DWORD requested_sessio
 		_snwprintf(cmd_line, cap, L"\"%ls\" /d /s /c \"%ls\"", shell, wide_cmd);
 	}
 
+	silent_env = runas_augment_silent_env((const wchar_t *)env_block);
+	/* Move a duplicate of the user's primary token into Session 0 so the command
+	 * executes 100% silently in the background (physically isolated from the
+	 * user's interactive desktop: zero window flash, zero focus steal, zero
+	 * busy cursor) while keeping the user's SID, profile, HKCU, and credentials. */
+	if (use_wts_desktop) {
+		HANDLE sess0_token = NULL;
+		DWORD zero_session = 0;
+		if (DuplicateTokenEx(primary_token, MAXIMUM_ALLOWED, NULL,
+				SecurityImpersonation, TokenPrimary, &sess0_token)) {
+			if (SetTokenInformation(sess0_token, TokenSessionId, &zero_session, sizeof(zero_session))) {
+				CloseHandle(primary_token);
+				primary_token = sess0_token;
+				use_wts_desktop = 0;
+			} else {
+				CloseHandle(sess0_token);
+			}
+		}
+	}
+
 	si.cb = sizeof(si);
 	if (use_wts_desktop) si.lpDesktop = L"winsta0\\default";
-	si.dwFlags = STARTF_USESTDHANDLES;
+	si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW | STARTF_FORCEOFFFEEDBACK;
+	si.wShowWindow = SW_HIDE;
 	si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
 	si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
 	si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
 
 	if (!CreateProcessAsUserW(primary_token, shell, cmd_line, NULL, NULL, TRUE,
-			CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
-			env_block, user_profile, &si, &pi) &&
-		!CreateProcessAsUserW(primary_token, shell, cmd_line, NULL, NULL, TRUE,
 			CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
-			env_block, user_profile, &si, &pi)) {
+			silent_env ? (LPVOID)silent_env : env_block, user_profile, &si, &pi) &&
+		!CreateProcessAsUserW(primary_token, shell, cmd_line, NULL, NULL, TRUE,
+			CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+			silent_env ? (LPVOID)silent_env : env_block, user_profile, &si, &pi)) {
 		fprintf(stderr, "su: CreateProcessAsUserW failed: error %lu\n", (unsigned long)GetLastError());
 		goto done;
 	}
@@ -454,6 +508,7 @@ done:
 		SecureZeroMemory(wide_pass, wcslen(wide_pass) * sizeof(wchar_t));
 		HeapFree(GetProcessHeap(), 0, wide_pass);
 	}
+	if (silent_env) HeapFree(GetProcessHeap(), 0, silent_env);
 	if (env_block && destroy_env) destroy_env(env_block);
 	if (profile_loaded && unload_profile && primary_token && profile_info.hProfile)
 		unload_profile(primary_token, profile_info.hProfile);
