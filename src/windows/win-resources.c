@@ -117,10 +117,10 @@ static void read_hostname(char *output, size_t size) {
 		snprintf(output, size, "unknown");
 }
 
-enum query_kind { QUERY_NONE, QUERY_UNAME, QUERY_SYSTEM, QUERY_CPU, QUERY_MEMORY, QUERY_DISK };
+enum query_kind { QUERY_NONE, QUERY_UNAME, QUERY_SYSTEM, QUERY_CPU, QUERY_MEMORY, QUERY_DISK, QUERY_TOOLS };
 
 static enum query_kind system_query_kind(const char *command, const char **options) {
-	static const char *const names[] = { "uname", "sysinfo", "cpuinfo", "meminfo", "diskinfo" };
+	static const char *const names[] = { "uname", "sysinfo", "cpuinfo", "meminfo", "diskinfo", "toolsinfo" };
 	size_t length, i;
 	const char *args;
 	if (!command) return QUERY_NONE;
@@ -222,6 +222,10 @@ int dropbear_win_system_query(const char *command) {
 		case QUERY_CPU: fields = RESOURCE_CPU; break;
 		case QUERY_MEMORY: fields = RESOURCE_MEMORY; break;
 		case QUERY_DISK: fields = RESOURCE_DISK; break;
+		case QUERY_TOOLS:
+			dropbear_win_print_tools_json(stdout);
+			fputc('\n', stdout);
+			return 0;
 		default: return 2;
 	}
 	resource_summary(resources, sizeof(resources), fields);

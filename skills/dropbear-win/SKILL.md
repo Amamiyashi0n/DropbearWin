@@ -159,3 +159,7 @@ successful transport or identity checks alone do not prove an application task s
 
 For MCP installation, environment variables and tool schemas, read
 [the integration reference](references/mcp.md).
+
+## Environment & Tool Discovery
+
+On connect, Dropbear-win merges live System and User Registry `PATH` (including the logged-on interactive user when running as a service) and exposes discovered executables in `probe.tools` (and via `ssh user@host toolsinfo`). `dropbear_run_script` automatically uses `probe.tools` for `python`/`node` when `program` is omitted.

@@ -143,8 +143,7 @@ class Remote(SessionRemote):
         source = script.encode("utf-8-sig" if runtime == "powershell" else "utf-8")
         if len(source) > 1024 * 1024:
             raise ValueError("script is limited to 1 MiB; upload larger files separately")
-        if runtime not in ("powershell", "qjs") and not program:
-            raise ValueError("Provide the absolute interpreter program for python or node")
+        # python/node can omit program if auto-discovered in remote probe["tools"].
         request = validate_work("exec", {
             "program": program or r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
             "args": args or [], "cwd": cwd, "env": env or {}, "stdin_base64": stdin_base64}, timeout)
@@ -164,6 +163,11 @@ class Remote(SessionRemote):
             if not context.get("script_staging") or not context.get("server_executable"):
                 raise RuntimeError("Upgrade the remote EXE to support private script staging")
             executable = context["server_executable"]
+            if runtime == "qjs" and not context.get("qjs"):
+                raise RuntimeError("Upgrade the remote EXE to support the embedded QuickJS-ng runtime")
+            discovered_program = (context.get("tools") or {}).get(runtime) if runtime in ("python", "node") else None
+            if runtime in ("python", "node") and not (program or discovered_program):
+                raise ValueError(f"Provide the absolute interpreter program for {runtime} (not found in remote PATH)")
             staging_requested = True
             out, err, status = self._exchange(client, payload=encode_request({
                 "program": executable, "args": ["--script-stage", stage_id]}))
@@ -183,12 +187,10 @@ class Remote(SessionRemote):
                 arguments = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"] + arguments
                 target_program = program or stage["powershell"]
             elif runtime == "qjs":
-                if not context.get("qjs"):
-                    raise RuntimeError("Upgrade the remote EXE to support the embedded QuickJS-ng runtime")
                 arguments = ["--qjs", filename] + request["args"]
                 target_program = executable
             else:
-                target_program = program
+                target_program = program or discovered_program
             payload = encode_request({"program": target_program, "args": arguments,
                                       "cwd": cwd, "env": request["env"]}) + data
             result = self.result(self._exchange(client, payload=payload, timeout=timeout), context, codec)

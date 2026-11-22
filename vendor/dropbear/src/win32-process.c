@@ -897,6 +897,12 @@ static int write_session_motd(int output_fd, const wchar_t *shell,
 	append_motd(motd, sizeof(motd), &used,
 		" Session target: default physical console; --session ID selects an active/connected console or RDP login. No new login is created.\r\n");
 	append_motd(motd, sizeof(motd), &used, " Shell:        %s\r\n", shell_utf8);
+	{
+		char tools_summary[512];
+		dropbear_win_format_tools_summary(tools_summary, sizeof(tools_summary), NULL);
+		if (tools_summary[0])
+			append_motd(motd, sizeof(motd), &used, " Tools:        %s\r\n", tools_summary);
+	}
 	append_motd(motd, sizeof(motd), &used, " Terminal:     %s (%s)\r\n",
 		safe_terminal[0] ? safe_terminal : "not requested",
 		safe_terminal[0] ? "PTY requested; native pipe transport" : "native SSH stream");
@@ -942,12 +948,19 @@ static wchar_t *session_environment(const char *user, const char *term,
 	wchar_t *inherited = GetEnvironmentStringsW(), *p, *result, *out;
 	wchar_t *wide_user = utf8_to_wide(user), *wide_term = utf8_to_wide(term);
 	wchar_t *wide_connection = utf8_to_wide(connection);
+	wchar_t *merged_path = NULL;
+	const wchar_t *inherited_path = NULL;
 	wchar_t cwd[MAX_PATH];
 	size_t capacity = 2;
 	if (!inherited || !wide_user || !wide_term || !wide_connection ||
 		!GetCurrentDirectoryW(MAX_PATH, cwd)) goto fail;
-	for (p = inherited; *p; p += wcslen(p) + 1) capacity += wcslen(p) + 1;
-	capacity += wcslen(wide_user) * 2 + wcslen(wide_term) +
+	for (p = inherited; *p; p += wcslen(p) + 1) {
+		if (!_wcsnicmp(p, L"PATH=", 5)) inherited_path = p + 5;
+		capacity += wcslen(p) + 1;
+	}
+	merged_path = dropbear_win_build_merged_path(inherited_path);
+	capacity += (merged_path ? wcslen(merged_path) + 8 : 0) +
+		wcslen(wide_user) * 2 + wcslen(wide_term) +
 		wcslen(wide_connection) * 2 + wcslen(shell) + wcslen(cwd) + 160;
 	result = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, capacity * sizeof(*result));
 	if (!result) goto fail;
@@ -956,8 +969,12 @@ static wchar_t *session_environment(const char *user, const char *term,
 		if (!_wcsnicmp(p, L"USER=", 5) || !_wcsnicmp(p, L"LOGNAME=", 8) ||
 			!_wcsnicmp(p, L"HOME=", 5) || !_wcsnicmp(p, L"SHELL=", 6) ||
 			!_wcsnicmp(p, L"TERM=", 5) || !_wcsnicmp(p, L"SSH_CONNECTION=", 15) ||
-			!_wcsnicmp(p, L"SSH_CLIENT=", 11)) continue;
+			!_wcsnicmp(p, L"SSH_CLIENT=", 11) ||
+			(merged_path && merged_path[0] && !_wcsnicmp(p, L"PATH=", 5))) continue;
 		wcscpy(out, p); out += wcslen(out) + 1;
+	}
+	if (merged_path && merged_path[0]) {
+		wcscpy(out, L"PATH="); wcscat(out, merged_path); out += wcslen(out) + 1;
 	}
 #define SESSION_ENV(name, value) do { wcscpy(out, name L"="); wcscat(out, value); out += wcslen(out) + 1; } while (0)
 	SESSION_ENV(L"USER", wide_user);
@@ -975,12 +992,14 @@ static wchar_t *session_environment(const char *user, const char *term,
 		SESSION_ENV(L"SSH_CLIENT", wide_connection);
 	}
 #undef SESSION_ENV
+	if (merged_path) HeapFree(GetProcessHeap(), 0, merged_path);
 	FreeEnvironmentStringsW(inherited);
 	HeapFree(GetProcessHeap(), 0, wide_user);
 	HeapFree(GetProcessHeap(), 0, wide_term);
 	HeapFree(GetProcessHeap(), 0, wide_connection);
 	return result;
 fail:
+	if (merged_path) HeapFree(GetProcessHeap(), 0, merged_path);
 	if (inherited) FreeEnvironmentStringsW(inherited);
 	if (wide_user) HeapFree(GetProcessHeap(), 0, wide_user);
 	if (wide_term) HeapFree(GetProcessHeap(), 0, wide_term);
@@ -1132,6 +1151,11 @@ static int try_resolve_direct_executable(const wchar_t *command,
 	}
 
 	found = SearchPathW(NULL, token, L".exe", resolved_cap, resolved, NULL);
+	if (!found || found >= resolved_cap) {
+		wchar_t *mp = dropbear_win_build_merged_path(NULL);
+		if (mp && mp[0]) found = SearchPathW(mp, token, L".exe", resolved_cap, resolved, NULL);
+		if (mp) HeapFree(GetProcessHeap(), 0, mp);
+	}
 	if (!found || found >= resolved_cap) return 0;
 	if (!has_suffix_ci(resolved, L".exe") && !has_suffix_ci(resolved, L".com")) return 0;
 	attrs = GetFileAttributesW(resolved);

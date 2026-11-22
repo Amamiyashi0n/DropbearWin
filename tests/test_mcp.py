@@ -207,7 +207,7 @@ class TransportTests(unittest.TestCase):
 
     def test_invalid_script_inputs_do_not_connect(self):
         for params in ({"runtime": "cmd"}, {"script": "x" * (1024 * 1024 + 1)},
-                       {"runtime": "python"}, {"stdin_base64": "bad!"}, {"timeout": 301},
+                       {"stdin_base64": "bad!"}, {"timeout": 301},
                        {"program": "relative.exe"}, {"cwd": "relative"}, {"encoding": "unknown-codec"}):
             remote = self.script_remote()
             with self.assertRaises((ValueError, LookupError)):
@@ -221,6 +221,10 @@ class TransportTests(unittest.TestCase):
             remote.run_script("Write-Output test")
         remote._exchange.assert_not_called()
         remote.connect.return_value.close.assert_called_once()
+        remote = self.script_remote()
+        with self.assertRaisesRegex(RuntimeError, "not found in remote PATH"):
+            remote.run_script("print(1)", runtime="python")
+        remote._exchange.assert_not_called()
         remote = self.script_remote()
         remote._exchange.side_effect = RuntimeError("SSH closed without an exit status")
         with self.assertRaisesRegex(RuntimeError, "staging outcome unknown; stage_id=[0-9a-f]{32}"):

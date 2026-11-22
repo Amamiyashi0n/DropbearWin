@@ -152,8 +152,10 @@ static int print_agent_probe(void) {
 	fprintf(stdout, ",\"session_id\":%lu,", (unsigned long)session_id);
 	fputs("\"identity_rule\":\"SSH user is a Dropbear authentication label; ordinary commands inherit the server process Windows token\","
 		"\"agent_guide_command\":\"__dropbear_win_guide__\","
-		"\"system_query_commands\":[\"uname\",\"sysinfo\",\"cpuinfo\",\"meminfo\",\"diskinfo\"],"
-		"\"script_staging\":true,\"qjs\":true,"
+		"\"system_query_commands\":[\"uname\",\"sysinfo\",\"cpuinfo\",\"meminfo\",\"diskinfo\",\"toolsinfo\"],"
+		"\"script_staging\":true,\"qjs\":true,\"path_refreshed\":true,\"tools\":", stdout);
+	dropbear_win_print_tools_json(stdout);
+	fputs(","
 		"\"desktop_launch\":{\"command\":\"--desktop-launch\","
 		"\"target\":\"console-or-explicit-session\",\"token\":\"selected-session-user\","
 		"\"arbitrary_session\":true,\"session_option\":\"--session\",\"user_check_option\":\"--expect-user\","
