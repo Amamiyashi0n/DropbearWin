@@ -86,7 +86,7 @@ class MCPContract(unittest.IsolatedAsyncioTestCase):
                 listed = await client.list_tools()
                 tools = {tool.name: tool for tool in listed.tools}
                 self.assertEqual(set(tools), {"dropbear_context", "dropbear_guide",
-                    "dropbear_manifest", "dropbear_sessions", "dropbear_run_command", "dropbear_exec", "dropbear_run_script", "dropbear_run_as_user", "dropbear_desktop_launch", "dropbear_session_screenshot", "dropbear_session_display", "dropbear_session_set_resolution",
+                    "dropbear_manifest", "dropbear_sessions", "dropbear_run_command", "dropbear_exec", "dropbear_run_script", "dropbear_run_as_user", "dropbear_bg_start", "dropbear_desktop_launch", "dropbear_session_screenshot", "dropbear_session_display", "dropbear_session_set_resolution",
                     "dropbear_session_list", "dropbear_session_exec", "dropbear_session_ui", "dropbear_session_worker_start", "dropbear_session_worker_call", "dropbear_session_worker_stop"})
                 self.assertEqual(set(tools), set(json.loads((ROOT / "src/windows/agent-mcp.json").read_bytes())["tools"]))
                 script_result = await client.call_tool("dropbear_run_script", {"script": "Write-Output script-ok"})
@@ -374,6 +374,19 @@ async def live():
         for bad in ({"command": ""}, {"command": "ok", "password": "pw"}, {"command": "ok", "username": "a", "session_id": 1}, {"command": "ok", "timeout": 0}):
             with self.assertRaises(ValueError):
                 remote.run_as_user(**bad)
+
+
+    def test_bg_start_validation_and_commands(self):
+        remote = Remote(Settings("example.invalid", "user", password="secret"))
+        remote.probe = MagicMock(return_value={"os": "windows", "version": 2, "user_switch": True, "bg_detach": True, "windows_user": "NT AUTHORITY\\SYSTEM", "session_id": 0})
+        remote.exchange = MagicMock(return_value=(b'{"detached":true,"pid":4321,"log":"C:\\Temp\\a.log"}\n', b"", 0))
+        res = remote.bg_start("node server.js", log_path="C:\\Temp\\a.log")
+        self.assertEqual(res["background"]["pid"], 4321)
+        self.assertEqual(remote.exchange.call_args.kwargs["command"], 'bg --log "C:\\Temp\\a.log" -- node server.js')
+        res2 = remote.bg_start("node server.js", username="Amamiya", in_session=True, log_path="C:\\Temp\\a.log")
+        self.assertEqual(remote.exchange.call_args.kwargs["command"], 'su --in-session --detach --log "C:\\Temp\\a.log" Amamiya node server.js')
+        with self.assertRaises(ValueError):
+            remote.bg_start("")
 
 if __name__ == "__main__":
     if "--fixture" in sys.argv:

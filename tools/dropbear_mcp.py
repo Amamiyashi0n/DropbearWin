@@ -221,7 +221,8 @@ class Remote(SessionRemote):
     def run_as_user(self, command: str, username: str | None = None,
                     session_id: int | None = None, active: bool = False,
                     admin: bool = False, in_session: bool = False,
-                    password: str | None = None, timeout: float = 30,
+                    password: str | None = None, detach: bool = False,
+                    log_path: str | None = None, timeout: float = 30,
                     encoding: str | None = None) -> dict:
         if not isinstance(command, str) or not command.strip() or "\0" in command:
             raise ValueError("command must be nonempty text without NUL")
@@ -251,6 +252,12 @@ class Remote(SessionRemote):
             parts.append("--admin")
         if in_session and session_id is None and password is None:
             parts.append("--in-session")
+        if detach:
+            parts.append("--detach")
+        if log_path is not None:
+            if not log_path.strip() or any(c in log_path for c in ("\0", "\r", "\n", '"')):
+                raise ValueError("invalid log_path")
+            parts.extend(["--log", f'"{log_path}"'])
         if password is not None:
             parts.append("-p")
             parts.append(f'"{password}"')
@@ -266,6 +273,45 @@ class Remote(SessionRemote):
         if not context.get("user_switch"):
             raise RuntimeError("Upgrade the remote EXE to support user switching (su)")
         return self.result(self.exchange(command=su_command, timeout=timeout), context, codec)
+
+    def bg_start(self, command: str, username: str | None = None,
+                 session_id: int | None = None, active: bool = False,
+                 admin: bool = False, in_session: bool = False,
+                 password: str | None = None, log_path: str | None = None,
+                 timeout: float = 30) -> dict:
+        if username or session_id is not None or active or password is not None:
+            res = self.run_as_user(command, username=username, session_id=session_id,
+                                   active=active, admin=admin, in_session=in_session,
+                                   password=password, detach=True, log_path=log_path,
+                                   timeout=timeout, encoding="utf-8")
+            if res["exit_code"] == 0 and res["stdout"].strip():
+                try:
+                    res["background"] = json.loads(res["stdout"].strip())
+                except ValueError:
+                    pass
+            return res
+        if not isinstance(command, str) or not command.strip() or "\0" in command:
+            raise ValueError("command must be nonempty text without NUL")
+        if len(command.encode("utf-8")) > 14000:
+            raise ValueError("command exceeds bg inline limit (14000 bytes)")
+        if not 0 < timeout <= 300:
+            raise ValueError("timeout must be between 0 and 300 seconds")
+        parts = ["bg"]
+        if log_path is not None:
+            if not log_path.strip() or any(c in log_path for c in ("\0", "\r", "\n", '"')):
+                raise ValueError("invalid log_path")
+            parts.extend(["--log", f'"{log_path}"'])
+        parts.extend(["--", command])
+        context = self.probe()
+        if not context.get("bg_detach"):
+            raise RuntimeError("Upgrade the remote EXE to support detached background launch (bg)")
+        res = self.result(self.exchange(command=" ".join(parts), timeout=timeout), context, "utf-8")
+        if res["exit_code"] == 0 and res["stdout"].strip():
+            try:
+                res["background"] = json.loads(res["stdout"].strip())
+            except ValueError:
+                pass
+        return res
 
     def session_screenshot(self, session_id: int, expected_user: str | None = None) -> tuple[bytes, dict]:
         if not 0 < session_id < 0xFFFFFFFF:
@@ -513,7 +559,8 @@ def create_server(remote: Remote) -> FastMCP:
     def dropbear_run_as_user(command: str, username: str | None = None,
                              session_id: int | None = None, active: bool = False,
                              admin: bool = False, in_session: bool = False,
-                             password: str | None = None, timeout: float = 30,
+                             password: str | None = None, detach: bool = False,
+                             log_path: str | None = None, timeout: float = 30,
                              encoding: str | None = None) -> dict:
         """Run a command silently as a Windows user (with their profile, HKCU, git/SSH credentials).
 
@@ -523,7 +570,21 @@ def create_server(remote: Remote) -> FastMCP:
         Set admin=True to elevate UAC split tokens to High-integrity Local Administrator.
         Pass password + username to force-logon a local user/Administrator even when not logged in.
         """
-        return remote.run_as_user(command, username, session_id, active, admin, in_session, password, timeout, encoding)
+        return remote.run_as_user(command, username, session_id, active, admin, in_session, password, detach, log_path, timeout, encoding)
+
+    @server.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+    def dropbear_bg_start(command: str, username: str | None = None,
+                          session_id: int | None = None, active: bool = False,
+                          admin: bool = False, in_session: bool = False,
+                          password: str | None = None, log_path: str | None = None,
+                          timeout: float = 30) -> dict:
+        """Launch a silent detached background process that survives SSH disconnect (no Scheduled Task needed).
+
+        Uses CREATE_BREAKAWAY_FROM_JOB + CREATE_NO_WINDOW + SW_HIDE and detaches stdio to NUL or log_path.
+        Returns immediately with background.pid. Omit user/session to run under the SSH service identity,
+        or specify username/active/session_id (with optional admin/in_session/password) to run as a user.
+        """
+        return remote.bg_start(command, username, session_id, active, admin, in_session, password, log_path, timeout)
 
     @server.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
     def dropbear_desktop_launch(program: str, args: list[str] | None = None,

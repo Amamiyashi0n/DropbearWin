@@ -23,6 +23,7 @@
     "dropbear_exec",
     "dropbear_run_script",
     "dropbear_run_as_user",
+    "dropbear_bg_start",
     "dropbear_desktop_launch",
     "dropbear_session_screenshot",
     "dropbear_session_display",

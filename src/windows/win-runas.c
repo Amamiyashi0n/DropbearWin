@@ -88,11 +88,12 @@ static void runas_json_escape(FILE *stream, const char *s) {
 static void runas_print_usage(FILE *stream) {
 	fputs(
 		"Usage:\n"
-		"  su --list                                         List logged-on Windows user sessions (JSON)\n"
-		"  su [--admin] [--in-session] <user> <cmd...>       Run as logged-on user (Session 0 by default; --in-session keeps user WTS session silently)\n"
-		"  su [--admin] [--in-session] --active <cmd...>     Run as active logged-on user\n"
-		"  su [--admin] --session <id> <cmd...>              Run silently inside the specified WTS session ID\n"
-		"  su [--admin] -p <password> <user> <cmd...>        Force-logon local user/Administrator (even if not logged in)\n"
+		"  su --list                                                      List logged-on Windows user sessions (JSON)\n"
+		"  su [--admin] [--in-session] [--detach] [--log <f>] <user> <c>  Run silently as logged-on user\n"
+		"  su [--admin] [--in-session] [--detach] [--log <f>] --active <c> Run silently as active logged-on user\n"
+		"  su [--admin] [--detach] [--log <f>] --session <id> <c>         Run silently inside specific WTS session ID\n"
+		"  su [--admin] [--detach] [--log <f>] -p <pwd> <user> <c>        Force-logon local user/Administrator\n"
+		"  bg [--log <f>] [--active|--user <u|id>|--admin|--in-session] <cmd...>  Launch detached silent background process (survives SSH disconnect)\n"
 		"Aliases: runas-user, --elevated (same as --admin), --password (same as -p)\n",
 		stream);
 }
@@ -229,7 +230,97 @@ static wchar_t *runas_augment_silent_env(const wchar_t *base_env) {
 	return buf;
 }
 
-static int runas_execute(int mode_active, int want_admin, int in_session, DWORD requested_session,
+
+static int open_detached_stdio(const char *log_utf8, HANDLE *nul_out, HANDLE *log_out) {
+	SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
+	*nul_out = INVALID_HANDLE_VALUE;
+	*log_out = INVALID_HANDLE_VALUE;
+	*nul_out = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
+		FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
+	if (*nul_out == INVALID_HANDLE_VALUE) return 0;
+	if (log_utf8 && log_utf8[0]) {
+		wchar_t *wide_log = runas_utf8_to_wide(log_utf8);
+		if (!wide_log) { CloseHandle(*nul_out); *nul_out = INVALID_HANDLE_VALUE; return 0; }
+		*log_out = CreateFileW(wide_log, GENERIC_WRITE,
+			FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		HeapFree(GetProcessHeap(), 0, wide_log);
+		if (*log_out == INVALID_HANDLE_VALUE) {
+			CloseHandle(*nul_out);
+			*nul_out = INVALID_HANDLE_VALUE;
+			return 0;
+		}
+		SetFilePointer(*log_out, 0, NULL, FILE_END);
+	}
+	return 1;
+}
+
+static int runas_bg_current_identity(const char *log_utf8, const char *command_utf8) {
+	wchar_t sys_dir[MAX_PATH], shell[MAX_PATH];
+	wchar_t *wide_cmd = NULL, *cmd_line = NULL;
+	wchar_t *inherited = GetEnvironmentStringsW();
+	wchar_t *silent_env = NULL;
+	HANDLE nul_h = INVALID_HANDLE_VALUE, log_h = INVALID_HANDLE_VALUE;
+	STARTUPINFOW si;
+	PROCESS_INFORMATION pi;
+	int status = 1;
+
+	memset(&si, 0, sizeof(si));
+	memset(&pi, 0, sizeof(pi));
+	if (!GetSystemDirectoryW(sys_dir, MAX_PATH)) goto done;
+	_snwprintf(shell, MAX_PATH, L"%ls\\cmd.exe", sys_dir);
+	wide_cmd = runas_utf8_to_wide(command_utf8);
+	if (!wide_cmd) goto done;
+	{
+		size_t cap = wcslen(shell) + wcslen(wide_cmd) + 32;
+		if (cap >= 32767) {
+			fputs("bg: command exceeds Windows command-line limit\n", stderr);
+			goto done;
+		}
+		cmd_line = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, cap * sizeof(*cmd_line));
+		if (!cmd_line) goto done;
+		_snwprintf(cmd_line, cap, L"\"%ls\" /d /s /c \"%ls\"", shell, wide_cmd);
+	}
+	if (!open_detached_stdio(log_utf8, &nul_h, &log_h)) {
+		fprintf(stderr, "bg: failed to open detached stdio/log: error %lu\n", (unsigned long)GetLastError());
+		goto done;
+	}
+	if (inherited) silent_env = runas_augment_silent_env(inherited);
+	si.cb = sizeof(si);
+	si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW | STARTF_FORCEOFFFEEDBACK;
+	si.wShowWindow = SW_HIDE;
+	si.hStdInput = nul_h;
+	si.hStdOutput = (log_h != INVALID_HANDLE_VALUE) ? log_h : nul_h;
+	si.hStdError = (log_h != INVALID_HANDLE_VALUE) ? log_h : nul_h;
+
+	if (!CreateProcessW(shell, cmd_line, NULL, NULL, TRUE,
+			CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+			silent_env, NULL, &si, &pi) &&
+		!CreateProcessW(shell, cmd_line, NULL, NULL, TRUE,
+			CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+			silent_env, NULL, &si, &pi)) {
+		fprintf(stderr, "bg: CreateProcessW failed: error %lu\n", (unsigned long)GetLastError());
+		goto done;
+	}
+	CloseHandle(pi.hThread);
+	CloseHandle(pi.hProcess);
+	fprintf(stdout, "{\"detached\":true,\"pid\":%lu,\"log\":", (unsigned long)pi.dwProcessId);
+	if (log_utf8 && log_utf8[0]) runas_json_escape(stdout, log_utf8);
+	else fputs("null", stdout);
+	fputs("}\n", stdout);
+	status = 0;
+
+done:
+	if (log_h != INVALID_HANDLE_VALUE) CloseHandle(log_h);
+	if (nul_h != INVALID_HANDLE_VALUE) CloseHandle(nul_h);
+	if (silent_env) HeapFree(GetProcessHeap(), 0, silent_env);
+	if (inherited) FreeEnvironmentStringsW(inherited);
+	if (cmd_line) HeapFree(GetProcessHeap(), 0, cmd_line);
+	if (wide_cmd) HeapFree(GetProcessHeap(), 0, wide_cmd);
+	return status;
+}
+
+static int runas_execute(int mode_active, int want_admin, int in_session, int detach,
+		const char *log_utf8, DWORD requested_session,
 		const char *target_user, const char *password_utf8, const char *command_utf8) {
 	typedef DWORD (WINAPI *active_session_fn)(void);
 	typedef BOOL (WINAPI *enum_sessions_fn)(HANDLE, DWORD, DWORD, PWTS_SESSION_INFOW *, DWORD *);
@@ -478,27 +569,59 @@ static int runas_execute(int mode_active, int want_admin, int in_session, DWORD 
 		}
 	}
 
-	si.cb = sizeof(si);
-	if (use_wts_desktop) si.lpDesktop = L"winsta0\\default";
-	si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW | STARTF_FORCEOFFFEEDBACK;
-	si.wShowWindow = SW_HIDE;
-	si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-	si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-	si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+	{
+		HANDLE nul_h = INVALID_HANDLE_VALUE, log_h = INVALID_HANDLE_VALUE;
+		DWORD first_flags = detach
+			? (CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT)
+			: (CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT);
+		DWORD second_flags = detach
+			? (CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT)
+			: (CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT);
+		if (detach && !open_detached_stdio(log_utf8, &nul_h, &log_h)) {
+			fprintf(stderr, "su: failed to open detached stdio/log: error %lu\n", (unsigned long)GetLastError());
+			goto done;
+		}
+		si.cb = sizeof(si);
+		if (use_wts_desktop) si.lpDesktop = L"winsta0\\default";
+		si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW | STARTF_FORCEOFFFEEDBACK;
+		si.wShowWindow = SW_HIDE;
+		if (detach) {
+			si.hStdInput = nul_h;
+			si.hStdOutput = (log_h != INVALID_HANDLE_VALUE) ? log_h : nul_h;
+			si.hStdError = (log_h != INVALID_HANDLE_VALUE) ? log_h : nul_h;
+		} else {
+			si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+			si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+			si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+		}
 
-	if (!CreateProcessAsUserW(primary_token, shell, cmd_line, NULL, NULL, TRUE,
-			CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
-			silent_env ? (LPVOID)silent_env : env_block, user_profile, &si, &pi) &&
-		!CreateProcessAsUserW(primary_token, shell, cmd_line, NULL, NULL, TRUE,
-			CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
-			silent_env ? (LPVOID)silent_env : env_block, user_profile, &si, &pi)) {
-		fprintf(stderr, "su: CreateProcessAsUserW failed: error %lu\n", (unsigned long)GetLastError());
-		goto done;
+		if (!CreateProcessAsUserW(primary_token, shell, cmd_line, NULL, NULL, TRUE,
+				first_flags, silent_env ? (LPVOID)silent_env : env_block, user_profile, &si, &pi) &&
+			!CreateProcessAsUserW(primary_token, shell, cmd_line, NULL, NULL, TRUE,
+				second_flags, silent_env ? (LPVOID)silent_env : env_block, user_profile, &si, &pi)) {
+			if (log_h != INVALID_HANDLE_VALUE) CloseHandle(log_h);
+			if (nul_h != INVALID_HANDLE_VALUE) CloseHandle(nul_h);
+			fprintf(stderr, "su: CreateProcessAsUserW failed: error %lu\n", (unsigned long)GetLastError());
+			goto done;
+		}
+		if (log_h != INVALID_HANDLE_VALUE) CloseHandle(log_h);
+		if (nul_h != INVALID_HANDLE_VALUE) CloseHandle(nul_h);
+		CloseHandle(pi.hThread);
+		if (detach) {
+			CloseHandle(pi.hProcess);
+			fprintf(stdout, "{\"detached\":true,\"pid\":%lu,\"session_id\":%lu,\"log\":",
+				(unsigned long)pi.dwProcessId,
+				(unsigned long)(use_wts_desktop ? chosen_session : 0));
+			if (log_utf8 && log_utf8[0]) runas_json_escape(stdout, log_utf8);
+			else fputs("null", stdout);
+			fputs("}\n", stdout);
+			status = 0;
+		} else {
+			WaitForSingleObject(pi.hProcess, INFINITE);
+			if (GetExitCodeProcess(pi.hProcess, &exit_code)) status = (int)exit_code;
+			CloseHandle(pi.hProcess);
+		}
 	}
-	CloseHandle(pi.hThread);
-	WaitForSingleObject(pi.hProcess, INFINITE);
-	if (GetExitCodeProcess(pi.hProcess, &exit_code)) status = (int)exit_code;
-	CloseHandle(pi.hProcess);
 
 done:
 	if (cmd_line) HeapFree(GetProcessHeap(), 0, cmd_line);
@@ -545,6 +668,7 @@ int dropbear_win_is_su_command(const char *command) {
 	p = command;
 	while (*p == ' ' || *p == '\t') p++;
 	if (strncmp(p, "su", 2) == 0 && (p[2] == '\0' || p[2] == ' ' || p[2] == '\t')) return 1;
+	if (strncmp(p, "bg", 2) == 0 && (p[2] == '\0' || p[2] == ' ' || p[2] == '\t')) return 1;
 	if (strncmp(p, "runas-user", 10) == 0 && (p[10] == '\0' || p[10] == ' ' || p[10] == '\t')) return 1;
 	return 0;
 }
@@ -554,25 +678,28 @@ int dropbear_win_su_exec_command(const char *command) {
 	char tok[256];
 	char user_buf[256] = "";
 	char pass_buf[512] = "";
+	char log_buf[1024] = "";
 	int has_pass = 0;
 	int want_admin = 0;
 	int in_session = 0;
+	int detach = 0;
+	int is_bg = 0;
 	int mode_active = 0;
 	DWORD requested_session = 0xffffffffUL;
 
 	while (*p == ' ' || *p == '\t') p++;
 	if (strncmp(p, "runas-user", 10) == 0) p += 10;
+	else if (strncmp(p, "bg", 2) == 0) { p += 2; is_bg = 1; detach = 1; }
 	else if (strncmp(p, "su", 2) == 0) p += 2;
 	while (*p == ' ' || *p == '\t') p++;
 	if (!*p || !strcmp(p, "-h") || !strcmp(p, "--help")) {
 		runas_print_usage(stdout);
 		return 0;
 	}
-	if (!strcmp(p, "--list") || !strcmp(p, "-l")) {
+	if (!is_bg && (!strcmp(p, "--list") || !strcmp(p, "-l"))) {
 		return runas_list_sessions();
 	}
 
-	/* Parse optional flags before target/command. */
 	while (*p) {
 		const char *next = read_token(p, tok, sizeof(tok));
 		if (!strcmp(tok, "--admin") || !strcmp(tok, "--elevated")) {
@@ -585,16 +712,32 @@ int dropbear_win_su_exec_command(const char *command) {
 			p = next;
 			continue;
 		}
+		if (!strcmp(tok, "--detach") || !strcmp(tok, "-d")) {
+			detach = 1;
+			p = next;
+			continue;
+		}
+		if (!strcmp(tok, "--log")) {
+			if (!*next) { runas_print_usage(stderr); return 2; }
+			p = read_token(next, log_buf, sizeof(log_buf));
+			continue;
+		}
 		if (!strcmp(tok, "-p") || !strcmp(tok, "--password")) {
 			if (!*next) { runas_print_usage(stderr); return 2; }
 			p = read_token(next, pass_buf, sizeof(pass_buf));
 			has_pass = 1;
 			continue;
 		}
+		if (!strcmp(tok, "--user") || !strcmp(tok, "-u")) {
+			if (!*next) { runas_print_usage(stderr); return 2; }
+			p = read_token(next, user_buf, sizeof(user_buf));
+			continue;
+		}
 		if (!strcmp(tok, "--active")) {
 			mode_active = 1;
 			p = next;
-			break;
+			if (!is_bg) break;
+			continue;
 		}
 		if (!strcmp(tok, "--session")) {
 			char sid_tok[64];
@@ -609,22 +752,37 @@ int dropbear_win_su_exec_command(const char *command) {
 			}
 			requested_session = (DWORD)sid;
 			in_session = 1;
+			if (!is_bg) break;
+			continue;
+		}
+		if (!strcmp(tok, "--")) {
+			p = next;
 			break;
 		}
-		/* Otherwise this token is the target username. */
+		if (is_bg) {
+			/* For `bg`, first non-flag token starts the command itself! */
+			break;
+		}
+		/* For `su`, first non-flag token is the target username. */
 		strncpy(user_buf, tok, sizeof(user_buf) - 1);
 		p = next;
 		break;
 	}
 
-	/* Allow `su --admin <cmd>` as shorthand for `su --admin --active <cmd>` only if user didn't pass username?
-	 * No, require explicit `--active` or `<username>` so command names aren't confused with usernames. */
-	if (!*p || (!mode_active && requested_session == 0xffffffffUL && !user_buf[0])) {
+	if (!*p) {
+		runas_print_usage(stderr);
+		return 2;
+	}
+	if (is_bg && !mode_active && requested_session == 0xffffffffUL && !user_buf[0] && !has_pass) {
+		return runas_bg_current_identity(log_buf[0] ? log_buf : NULL, p);
+	}
+	if (!mode_active && requested_session == 0xffffffffUL && !user_buf[0]) {
 		runas_print_usage(stderr);
 		return 2;
 	}
 	{
-		int rc = runas_execute(mode_active, want_admin, in_session, requested_session,
+		int rc = runas_execute(mode_active, want_admin, in_session, detach,
+			log_buf[0] ? log_buf : NULL, requested_session,
 			user_buf[0] ? user_buf : NULL, has_pass ? pass_buf : NULL, p);
 		SecureZeroMemory(pass_buf, sizeof(pass_buf));
 		return rc;

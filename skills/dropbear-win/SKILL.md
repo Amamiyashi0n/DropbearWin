@@ -172,3 +172,9 @@ When the service runs as `NT AUTHORITY\SYSTEM`, commands do not see a logged-on 
 - **In-session silent mode**: pass `in_session=True` or an explicit `session_id` (from `dropbear_session_list` or `su --list`) when a task requires the user's actual WTS session (e.g. session-scoped COM/pipes/GPU). It still runs silently (`CREATE_NO_WINDOW`, `SW_HIDE`, `STARTF_FORCEOFFFEEDBACK`, `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, `SSH_ASKPASS_REQUIRE=never`).
 - **Elevated Local Administrator**: set `admin=True` (or SSH `su --admin`) to elevate a UAC split token via `TokenLinkedToken` to High Mandatory Level.
 - **Force-logon non-logged-in user**: pass `username` + `password` (or SSH `su [--admin] -p <password> <user> <cmd>`) to log on a local user or built-in `Administrator` via `LogonUserW` + `LoadUserProfileW`.
+
+## Detached Background Processes (`dropbear_bg_start` / `bg`)
+
+Ordinary SSH commands live inside a channel Job that terminates child trees on disconnect. For long-running daemons, dev servers, or tasks that must survive SSH disconnect, use `dropbear_bg_start` (or SSH `bg [--log <file>] [--active|--user <u|id>|--admin|--in-session] <cmd>`) instead of creating Windows Scheduled Tasks:
+
+- Breaks out of the SSH Job cleanly (`CREATE_BREAKAWAY_FROM_JOB`), runs silently (`CREATE_NO_WINDOW`, `SW_HIDE`, `STARTF_FORCEOFFFEEDBACK`), detaches stdio to `NUL` or `log_path`, and returns `{"detached": true, "pid": ...}` immediately.

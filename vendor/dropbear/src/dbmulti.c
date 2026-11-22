@@ -114,6 +114,7 @@ void dropbear_win_agent_banner(char *output, size_t size) {
 		"  - Built-in JS runtime: `qjs -e \"<code>\"` or `qjs -` (QuickJS-ng ES2023, reads stdin)\r\n"
 		"  - Live PATH: System + User PATH refreshed automatically on every connection\r\n"
 		"  - User switch: `su --list`, `su [--admin] [--in-session] <user|--active> <cmd>`, `su [--admin] --session <id> <cmd>`, or `su -p <pwd> <user> <cmd>` (silent)\r\n"
+		"  - Detached background: `bg [--log <file>] [--active|--user <u|id>|--admin|--in-session] <cmd>` (survives SSH disconnect, returns JSON pid)\r\n"
 		"Available tools on this host:\r\n"
 		"  %s\r\n"
 		"Read-only diagnostic commands (same SSH host/user/port):\r\n"
