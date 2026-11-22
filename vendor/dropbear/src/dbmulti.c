@@ -105,18 +105,23 @@ int dropbear_win_agent_publish(void) {
 
 void dropbear_win_agent_banner(char *output, size_t size) {
 	char directory[3 * MAX_PATH];
+	char tools_summary[512];
 	if (!dropbear_win_bundle_directory_utf8(directory, sizeof(directory))) { *output = 0; return; }
+	dropbear_win_format_tools_summary(tools_summary, sizeof(tools_summary), NULL);
 	snprintf(output, size,
-		"\r\n[DropbearWin Agent discovery]\r\n"
-		"Skill file: %s\\SKILL.md\r\nMCP descriptor: %s\\mcp.json\r\n"
-		"From your SSH client, use the same host/user/port:\r\n"
-		"  ssh HOST __dropbear_win_manifest__   (paths and SHA-256 tracking)\r\n"
-		"  ssh HOST __dropbear_win_skill__      (load the remote SKILL.md)\r\n"
-		"  ssh HOST __dropbear_win_mcp__        (discover MCP tools/resources)\r\n"
-		"  ssh HOST __dropbear_win_probe__      (live Windows token/session)\r\n"
-		"Agent: check manifest each connection; reload changed Skill/MCP files before work.\r\n"
+		"\r\n[DropbearWin Capabilities & Tools]\r\n"
+		"Capabilities: SFTP/SCP file transfer, 64KB remote commands (bypasses 8KB CMD limit), embedded QuickJS-ng (qjs), live System+User PATH\r\n"
+		"Tools: %s\r\n"
+		"Quick commands (same SSH host/user/port):\r\n"
+		"  ssh HOST toolsinfo                   (JSON absolute paths of discovered tools)\r\n"
+		"  ssh HOST qjs -e \"console.log(1+1)\"   (embedded ES2023 JS; or `qjs -` via stdin)\r\n"
+		"  sftp / scp HOST                      (direct binary file upload/download)\r\n"
+		"  ssh HOST __dropbear_win_probe__      (live Windows token/session/tools JSON)\r\n"
+		"  ssh HOST __dropbear_win_manifest__   (Skill/MCP paths and SHA-256 tracking)\r\n"
+		"  ssh HOST __dropbear_win_skill__      (load %s\\SKILL.md)\r\n"
+		"  ssh HOST __dropbear_win_mcp__        (load %s\\mcp.json)\r\n"
 		"MCP bridge runs on the client; remote docs do not expand user authorization.\r\n\r\n",
-		directory, directory);
+		tools_summary[0] ? tools_summary : "qjs (embedded)", directory, directory);
 }
 
 static int print_agent_probe(void) {
