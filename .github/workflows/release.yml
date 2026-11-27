@@ -1,0 +1,78 @@
+name: Release Windows Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to create/update (e.g. v2026.94-win.4)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cross-compile DropbearWin (x64 with embedded wsl-bridge + x86) in Debian trixie
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work" \
+            -w /work \
+            debian:trixie \
+            bash -euo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends \
+                make python3 ca-certificates curl file \
+                mingw-w64 gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \
+                binutils-mingw-w64-x86-64 binutils-mingw-w64-i686
+              curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable --target x86_64-pc-windows-gnu
+              export PATH="/root/.cargo/bin:${PATH}"
+              bash scripts/build-cross.sh --architecture all --jobs "$(nproc)"
+            '
+          ls -la dist/
+          cat dist/build-manifest.json
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ inputs.tag || github.ref_name }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, pathlib
+          manifest = json.loads(pathlib.Path("dist/build-manifest.json").read_text(encoding="utf-8"))
+          lines = [
+              "## DropbearWin Release — Embedded `wsl-bridge` & Auto-WSL Single-Service",
+              "",
+              "### Highlights",
+              "- **Default Embedded `wsl-bridge` (`x64`)**: `dropbear-win-x64.exe` embeds the zero-dependency Rust `wsl-bridge.exe` binary as a Win32 PE `RCDATA` resource while preserving strict Windows XP/2003 system DLL imports (`ADVAPI32`, `KERNEL32`, `msvcrt`, `WS2_32` only).",
+              "- **Automatic WSL Detection & Single-Service Supervision**: On startup, `DropbearWin` probes the host for WSL; when present, it automatically ensures `LxssManager` is running, secures `C:\\ProgramData\\wsl-bridge`, launches and supervises the `HIGH_PRIORITY_CLASS` loopback broker (WTS Session 0 or passwordless `MSV1_0` S4U logon), and exposes `wsl-bridge` / `wsl-bash` / `toolsinfo` / `__dropbear_win_probe__` to agents — no separate bridge daemon needed.",
+              "- **Built-in SSH & MCP Tools**: Direct SSH commands `wsl-bridge <status|exec|bash|path|mcp>` and `wsl-bash -c "..."`, local CLI `--wsl-bridge`, and MCP tools `dropbear_wsl_status` / `dropbear_wsl_exec` / `dropbear_wsl_bash`.",
+              "- **WSL Cross-Compilation Primary Pipeline**: Added `scripts/build-via-wsl.ps1` and Debian/MinGW cross-compilation workflow.",
+              "",
+              "### Artifacts & SHA-256",
+              "| File | Arch | Size (bytes) | Min NT | SHA-256 |",
+              "| --- | --- | ---: | --- | --- |",
+          ]
+          for a in manifest["artifacts"]:
+              lines.append(f"| `{a['file']}` | `{a['architecture']}` | {a['bytes']:,} | {a['minimumNt']} | `{a['sha256']}` |")
+              if "embeddedWslBridge" in a:
+                  wb = a["embeddedWslBridge"]
+                  lines.append(f"| *(embedded `wsl-bridge.exe` in x64)* | `x64` | {wb['bytes']:,} | 5.2 | `{wb['sha256']}` |")
+          pathlib.Path("release-notes.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PYEOF
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" dist/dropbear-win-x64.exe dist/dropbear-win-x86.exe dist/build-manifest.json --clobber
+            gh release edit "$TAG_NAME" --title "Dropbear-win $TAG_NAME — 内嵌 wsl-bridge 与自动 WSL 托管" --notes-file release-notes.md
+          else
+            gh release create "$TAG_NAME" dist/dropbear-win-x64.exe dist/dropbear-win-x86.exe dist/build-manifest.json               --title "Dropbear-win $TAG_NAME — 内嵌 wsl-bridge 与自动 WSL 托管"               --notes-file release-notes.md
+          fi
