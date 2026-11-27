@@ -1,4 +1,5 @@
 *.sh text eol=lf
+*.in text eol=lf
 configure text eol=lf
 config.guess text eol=lf
 config.sub text eol=lf

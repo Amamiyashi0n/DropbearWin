@@ -251,12 +251,22 @@ bash scripts/build-cross.sh --architecture all --jobs 6
 ```
 
 用 `--architecture x64` 或 `--architecture x86` 单独构建，`--clean` 可重建所选架构
-的构建目录。EXE 输出到 `dist/`，`dist/build-manifest.json` 记录本次构建的文件名、
-大小与 SHA-256。Windows 本机构建可使用 MSYS2 和对应 MinGW 工具链。
+的构建目录（在 WSL 中默认自动使用高速 Linux VolFs 缓存 `~/.cache/dropbear-win-build`）。EXE 输出到 `dist/`，`dist/build-manifest.json` 记录本次构建通道、文件名、大小、SHA-256 及 `x64` 内嵌 `wsl-bridge.exe` 信息。
+
+### 发布主线构建（Windows 侧通过 Debian WSL 交叉编译，推荐）
 
 ```powershell
-.\scripts\build-native.ps1 -Msys2Root C:\msys64 -Architecture all
+# 构建 x64（默认内嵌 wsl-bridge.exe）+ x86 主线发布产物到 dist\
+.\scripts\build-via-wsl.ps1 -Architecture all -Jobs 6
+
+# 全新干净构建
+.\scripts\build-via-wsl.ps1 -Clean -Architecture all -Jobs 6
+
+# 构建并原子热更新部署到 C:\Program Files\DropbearWin（需管理员权限）
+.\scripts\build-via-wsl.ps1 -Architecture x64 -Deploy
 ```
+
+> 备用（遗留 MSYS2 本机构建）：`.\scripts\build-native.ps1 -Msys2Root C:\msys64 -Architecture all`
 
 构建会检查 PE 架构、子系统版本、管理员清单和 DLL/API 导入表。NT 5.1/5.2 是基础 SSH
 的静态兼容基线，旧系统仍需实机验证。桌面启动依赖 Vista / Server 2008 或更新系统

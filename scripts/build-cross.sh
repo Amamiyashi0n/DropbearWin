@@ -45,8 +45,21 @@ case "$architecture" in all|x64|x86) ;; *) usage >&2; exit 2 ;; esac
 
 project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 source_dir=$project_root/vendor/dropbear
-build_root=${DROPBEAR_BUILD_ROOT:-$project_root/build}
+if [[ -n "${DROPBEAR_BUILD_ROOT:-}" ]]; then
+    build_root=$DROPBEAR_BUILD_ROOT
+elif grep -qi microsoft /proc/version 2>/dev/null && [[ "$project_root" == /mnt/* ]]; then
+    build_root=$HOME/.cache/dropbear-win-build
+else
+    build_root=$project_root/build
+fi
 dist_dir=$project_root/dist
+# Normalize CRLF on autotools files when checked out on Windows
+python3 -c 'import pathlib, sys; root = pathlib.Path(sys.argv[1])
+for p in root.rglob("*"):
+    if not p.is_file(): continue
+    if p.suffix in (".sh", ".in") or p.name in ("configure", "config.guess", "config.sub", "install-sh"):
+        b = p.read_bytes()
+        if b"\r\n" in b: p.write_bytes(b.replace(b"\r\n", b"\n"))' "$source_dir"
 build_host=$(sh "$source_dir/src/config.guess")
 
 for command_name in make python3 sha256sum; do
@@ -218,7 +231,7 @@ build_target() {
 
 for target in "${targets[@]}"; do build_target "$target"; done
 
-python3 - "$stage_dir" "$stage_dir/build-manifest.json" "${targets[@]}" <<'PY'
+python3 - "$stage_dir" "$build_root" "$stage_dir/build-manifest.json" "${targets[@]}" <<'PY'
 import datetime
 import hashlib
 import json
@@ -226,20 +239,33 @@ import pathlib
 import sys
 
 stage = pathlib.Path(sys.argv[1])
-manifest = pathlib.Path(sys.argv[2])
+build_root = pathlib.Path(sys.argv[2])
+manifest = pathlib.Path(sys.argv[3])
+is_wsl = pathlib.Path("/proc/version").exists() and "microsoft" in pathlib.Path("/proc/version").read_text(errors="ignore").lower()
 artifacts = []
-for architecture in sys.argv[3:]:
+for architecture in sys.argv[4:]:
     filename = f"dropbear-win-{architecture}.exe"
     data = (stage / filename).read_bytes()
-    artifacts.append({
+    entry = {
         "file": filename,
         "architecture": architecture,
         "bytes": len(data),
         "sha256": hashlib.sha256(data).hexdigest().upper(),
         "minimumNt": "5.2" if architecture == "x64" else "5.1",
-    })
+    }
+    if architecture == "x64":
+        wb_exe = build_root / "x64" / "wsl-bridge.exe"
+        if wb_exe.is_file():
+            wb_data = wb_exe.read_bytes()
+            entry["embeddedWslBridge"] = {
+                "included": True,
+                "bytes": len(wb_data),
+                "sha256": hashlib.sha256(wb_data).hexdigest().upper(),
+            }
+    artifacts.append(entry)
 manifest.write_text(json.dumps({
     "builtAtUtc": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+    "buildPipeline": "wsl-cross-mingw" if is_wsl else "linux-cross-mingw",
     "artifacts": artifacts,
 }, indent=2) + "\n", encoding="utf-8")
 PY
