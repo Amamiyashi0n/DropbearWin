@@ -1520,6 +1520,12 @@ int dropbear_win_spawn_shell(const char *command, const char *ssh_user,
 		command_line = make_internal_command_line(executable,
 			L"--dropbear-win-qjs", command);
 		internal_mode = 1;
+	} else if (dropbear_win_is_wsl_command(command)) {
+		if (!GetModuleFileNameW(NULL, executable, MAX_PATH)) goto fail;
+		application = executable;
+		command_line = make_internal_command_line(executable,
+			L"--dropbear-win-wsl", command);
+		internal_mode = 1;
 	} else if (dropbear_win_is_system_query(command)) {
 		if (!GetModuleFileNameW(NULL, executable, MAX_PATH)) goto fail;
 		application = executable;

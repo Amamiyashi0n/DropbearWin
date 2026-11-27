@@ -684,6 +684,7 @@ static int install_registered_service(int argc, char **argv, DWORD start_type) {
 		created_marker = 1;
 	}
 	if (!dropbear_win_bundle_begin(install_dir, &bundle)) goto done;
+	if (dropbear_win_wsl_has_embedded()) dropbear_win_wsl_extract_to_dir(install_dir, 0);
 	command_line = dropbear_win_build_service_command_line(installed_exe, argc, argv);
 	if (!command_line) goto done;
 	if (service) {
@@ -878,6 +879,9 @@ int dropbear_win_uninstall(int argc, char **argv) {
 				!remove_installed_file(other_exe, &restart_required)) goto done;
 	}
 	if (!remove_installed_file(script, &restart_required)) goto done;
+	other_length = _snwprintf(other_exe, 32768, L"%ls\\wsl-bridge.exe", install_dir);
+	if (other_length > 0 && other_length < 32768 &&
+			!remove_installed_file(other_exe, &restart_required)) goto done;
 	/* A second architecture may have been copied into the same install folder. */
 	other_length = _snwprintf(other_exe, 32768, L"%ls\\dropbear-win-x64.exe", install_dir);
 	if (other_length <= 0 || other_length >= 32768) goto done;

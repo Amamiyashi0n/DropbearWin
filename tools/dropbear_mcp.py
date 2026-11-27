@@ -313,6 +313,68 @@ class Remote(SessionRemote):
                 pass
         return res
 
+    def wsl_status(self, timeout: float = 15) -> dict:
+        if not 0 < timeout <= 120:
+            raise ValueError("timeout must be between 0 and 120 seconds")
+        context = self.probe()
+        res = self.result(self.exchange(command="wsl-bridge status", timeout=timeout), context, "utf-8")
+        if res["exit_code"] == 0 and res["stdout"].strip():
+            try:
+                res["wsl_status"] = json.loads(res["stdout"].strip())
+            except ValueError:
+                pass
+        return res
+
+    def wsl_exec(self, program: str, args: list[str] | None = None,
+                 cwd: str | None = None, env: dict[str, str] | None = None,
+                 sudo: bool = False, timeout: float = 60) -> dict:
+        if not isinstance(program, str) or not program.strip() or "\0" in program:
+            raise ValueError("program must be nonempty text without NUL")
+        if not 0 < timeout <= 300:
+            raise ValueError("timeout must be between 0 and 300 seconds")
+        def _q(tok: str) -> str:
+            if any(c in tok for c in ("\0", "\r", "\n")):
+                raise ValueError("wsl_exec arguments cannot contain NUL or CR/LF")
+            esc = tok.replace('\\', '\\\\').replace('"', '\\"')
+            return f'"{esc}"'
+        parts = ["wsl-bridge", "exec"]
+        if cwd:
+            parts.extend(["--cwd", _q(cwd)])
+        if env:
+            for k, v in env.items():
+                parts.extend(["--env", _q(f"{k}={v}")])
+        if sudo:
+            parts.append("--sudo")
+        parts.extend(["--", _q(program)])
+        for a in (args or []):
+            parts.append(_q(str(a)))
+        context = self.probe()
+        return self.result(self.exchange(command=" ".join(parts), timeout=timeout), context, "utf-8")
+
+    def wsl_bash(self, script: str, cwd: str | None = None,
+                 env: dict[str, str] | None = None, sudo: bool = False,
+                 timeout: float = 60) -> dict:
+        if not isinstance(script, str) or not script.strip() or "\0" in script:
+            raise ValueError("script must be nonempty text without NUL")
+        if not 0 < timeout <= 300:
+            raise ValueError("timeout must be between 0 and 300 seconds")
+        def _q(tok: str) -> str:
+            if any(c in tok for c in ("\0", "\r", "\n")):
+                raise ValueError("wsl_bash options cannot contain NUL or CR/LF")
+            esc = tok.replace('\\', '\\\\').replace('"', '\\"')
+            return f'"{esc}"'
+        parts = ["wsl-bridge", "exec"]
+        if cwd:
+            parts.extend(["--cwd", _q(cwd)])
+        if env:
+            for k, v in env.items():
+                parts.extend(["--env", _q(f"{k}={v}")])
+        if sudo:
+            parts.append("--sudo")
+        parts.extend(["--", "/usr/bin/bash", "-s"])
+        context = self.probe()
+        return self.result(self.exchange(command=" ".join(parts), stdin=script.encode("utf-8"), timeout=timeout), context, "utf-8")
+
     def session_screenshot(self, session_id: int, expected_user: str | None = None) -> tuple[bytes, dict]:
         if not 0 < session_id < 0xFFFFFFFF:
             raise ValueError("session_id must be a positive Windows Session ID")
@@ -585,6 +647,25 @@ def create_server(remote: Remote) -> FastMCP:
         or specify username/active/session_id (with optional admin/in_session/password) to run as a user.
         """
         return remote.bg_start(command, username, session_id, active, admin, in_session, password, log_path, timeout)
+
+    @server.tool(annotations={"readOnlyHint": True})
+    def dropbear_wsl_status(timeout: float = 15) -> dict:
+        """Inspect live Debian WSL1 & embedded wsl-bridge loopback broker health."""
+        return remote.wsl_status(timeout=timeout)
+
+    @server.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+    def dropbear_wsl_exec(program: str, args: list[str] | None = None,
+                          cwd: str | None = None, env: dict[str, str] | None = None,
+                          sudo: bool = False, timeout: float = 60) -> dict:
+        """Execute a Linux binary directly inside Debian WSL1 via embedded wsl-bridge (no cmd.exe quoting)."""
+        return remote.wsl_exec(program, args=args, cwd=cwd, env=env, sudo=sudo, timeout=timeout)
+
+    @server.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
+    def dropbear_wsl_bash(script: str, cwd: str | None = None,
+                          env: dict[str, str] | None = None, sudo: bool = False,
+                          timeout: float = 60) -> dict:
+        """Run a multi-line bash script inside Debian WSL1 via embedded wsl-bridge (streamed over stdin)."""
+        return remote.wsl_bash(script, cwd=cwd, env=env, sudo=sudo, timeout=timeout)
 
     @server.tool(annotations={"readOnlyHint": False, "destructiveHint": True})
     def dropbear_desktop_launch(program: str, args: list[str] | None = None,

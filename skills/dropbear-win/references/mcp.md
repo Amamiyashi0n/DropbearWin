@@ -161,3 +161,18 @@ nonempty directory.
 - **In-session silent mode**: set `in_session=True` or pass an explicit `session_id` to keep the process inside the user's WTS session while still hiding windows (`CREATE_NO_WINDOW`, `SW_HIDE`, `STARTF_FORCEOFFFEEDBACK`) and suppressing GUI credential prompts (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, `SSH_ASKPASS_REQUIRE=never`).
 - **Local Administrator elevation**: set `admin=True` to obtain the elevated High-integrity linked token when UAC split-token is active.
 - **Force logon**: provide `username` and `password` to authenticate a non-logged-in local user or `Administrator` via `LogonUserW` and `LoadUserProfileW`.
+
+## Embedded `wsl-bridge` (Debian WSL1 Direct Pass-Through)
+
+`dropbear-win-x64.exe` embeds the zero-dependency Rust `wsl-bridge.exe` binary (`vendor/wsl-bridge`) as a Win32 PE `RCDATA` resource while preserving strict Windows XP/2003 DLL imports (`ADVAPI32`, `KERNEL32`, `msvcrt`, `WS2_32` only).
+
+- **Direct SSH built-ins** (bypass `cmd.exe`, lossless UTF-8 & binary stdio, ~1–22 ms via shared `C:\ProgramData\wsl-bridge\broker.json`):
+  - `ssh HOST wsl-bridge status`
+  - `ssh HOST wsl-bridge exec [--cwd <dir>] [--env K=V] [--sudo] -- <cmd> [args...]`
+  - `ssh HOST wsl-bash -c "whoami && sudo -n id -u"`
+  - `ssh HOST wsl-bridge path --to-linux "C:\Users\Amamiya"`
+- **Local CLI flags**:
+  - `dropbear-win-x64.exe --wsl-bridge <args...>`
+  - `dropbear-win-x64.exe --wsl-bridge --extract [dir]`
+  - `dropbear-win-x64.exe --wsl-bridge --install-shims [dir]` (extracts `wsl-bridge.exe`, `bash.exe`, `sh.exe`)
+- **MCP tools** (in `tools/dropbear_mcp.py`): `dropbear_wsl_status`, `dropbear_wsl_exec`, `dropbear_wsl_bash`.

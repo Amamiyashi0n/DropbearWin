@@ -1,0 +1,12 @@
+[package]
+name = "wsl-bridge"
+version = "0.3.0"
+edition = "2021"
+description = "Ultra-low-latency direct pass-through bridge, high-priority boot broker, and MCP server for Debian WSL1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

@@ -318,6 +318,12 @@ void dropbear_win_print_tools_json(FILE *stream) {
 		fputs("\"qjs\":", stream);
 		print_json_escaped(stream, qjs_cmd);
 		first = 0;
+		if (dropbear_win_wsl_has_embedded()) {
+			char wsl_cmd[MAX_PATH * 3 + 24];
+			snprintf(wsl_cmd, sizeof(wsl_cmd), "%s --wsl-bridge", utf8);
+			fputs(",\"wsl-bridge\":", stream);
+			print_json_escaped(stream, wsl_cmd);
+		}
 	}
 	if (merged && merged[0]) {
 		for (i = 0; i < sizeof(KNOWN_TOOLS) / sizeof(KNOWN_TOOLS[0]); i++) {
@@ -383,8 +389,13 @@ void dropbear_win_format_tools_summary(char *output, size_t output_size, const w
 		search_path = owned_path;
 	}
 
-	used += (size_t)snprintf(output + used, output_size - used, "qjs (embedded)");
-	count++;
+	if (dropbear_win_wsl_has_embedded()) {
+		used += (size_t)snprintf(output + used, output_size - used, "qjs (embedded), wsl-bridge (embedded)");
+		count += 2;
+	} else {
+		used += (size_t)snprintf(output + used, output_size - used, "qjs (embedded)");
+		count++;
+	}
 	if (search_path && search_path[0]) {
 		for (i = 0; i < sizeof(KNOWN_TOOLS) / sizeof(KNOWN_TOOLS[0]); i++) {
 			int n;

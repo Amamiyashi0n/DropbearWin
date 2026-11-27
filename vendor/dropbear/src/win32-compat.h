@@ -248,6 +248,11 @@ int dropbear_win_su_exec_command(const char *command);
 int dropbear_win_qjs_main(int argc, char **argv);
 int dropbear_win_is_qjs_command(const char *command);
 int dropbear_win_qjs_exec_command(const char *command);
+int dropbear_win_wsl_has_embedded(void);
+int dropbear_win_wsl_extract_to_dir(const wchar_t *directory, int also_shims);
+int dropbear_win_wsl_main(int argc, char **argv);
+int dropbear_win_is_wsl_command(const char *command);
+int dropbear_win_wsl_exec_command(const char *command);
 int dropbear_win_script_directory(const char *id, int create, char *output, size_t size);
 void dropbear_win_runtime_security(char *identity, size_t identity_size,
 	char *token_text, size_t token_size, DWORD *session_id);

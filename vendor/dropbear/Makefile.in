@@ -41,7 +41,7 @@ _COMMONOBJS=dbutil.o buffer.o dbhelpers.o \
 		dss.o bignum.o \
 		signkey.o rsa.o dbrandom.o \
 		queue.o \
-		win-account.o win32-compat.o win32-process.o win-sftp.o win-service.o win-agent-bundle.o win-resources.o win-port.o win-log.o win-script.o win-tools.o win-runas.o win-qjs.o qjs-quickjs.o qjs-quickjs-libc.o qjs-dtoa.o qjs-libregexp.o qjs-libunicode.o \
+		win-account.o win32-compat.o win32-process.o win-sftp.o win-service.o win-agent-bundle.o win-resources.o win-port.o win-log.o win-script.o win-tools.o win-runas.o win-wsl.o win-qjs.o qjs-quickjs.o qjs-quickjs-libc.o qjs-dtoa.o qjs-libregexp.o qjs-libunicode.o \
 		atomicio.o compat.o fake-rfc2553.o \
 		ltc_prng.o ecc.o ecdsa.o sk-ecdsa.o crypto_desc.o \
 		curve25519.o ed25519.o sk-ed25519.o \
@@ -181,6 +181,9 @@ $(OBJ_DIR)/win-runas.o: @srcdir@/../../src/windows/win-runas.c $(HEADERS) | $(OB
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(srcdir) -c $< -o $@
 
 $(OBJ_DIR)/win-tools.o: @srcdir@/../../src/windows/win-tools.c $(HEADERS) | $(OBJ_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(srcdir) -c $< -o $@
+
+$(OBJ_DIR)/win-wsl.o: @srcdir@/../../src/windows/win-wsl.c $(HEADERS) | $(OBJ_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(srcdir) -c $< -o $@
 
 $(OBJ_DIR)/win-script.o: @srcdir@/../../src/windows/win-script.c $(HEADERS) | $(OBJ_DIR)

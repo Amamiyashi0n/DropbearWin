@@ -45,7 +45,7 @@ case "$architecture" in all|x64|x86) ;; *) usage >&2; exit 2 ;; esac
 
 project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 source_dir=$project_root/vendor/dropbear
-build_root=$project_root/build
+build_root=${DROPBEAR_BUILD_ROOT:-$project_root/build}
 dist_dir=$project_root/dist
 build_host=$(sh "$source_dir/src/config.guess")
 
@@ -143,8 +143,23 @@ build_target() {
     mkdir -p "$build_dir"
     mkdir -p "$build_dir/obj"
     python3 "$project_root/scripts/embed-agent-bundle.py" "$build_dir/agent-bundle.generated.h"
+    local windres_extra=()
+    if [[ "$arch" == x64 ]] && [[ -f "$project_root/vendor/wsl-bridge/Cargo.toml" ]]; then
+        export PATH="$HOME/.cargo/bin:$PATH"
+        if command -v cargo >/dev/null 2>&1; then
+            printf 'Cross-compiling embedded wsl-bridge (x86_64-pc-windows-gnu)...\n'
+            local wb_target="${WSL_BRIDGE_TARGET_DIR:-$HOME/.cache/wsl-bridge-target}"
+            CARGO_TARGET_DIR="$wb_target" cargo build --manifest-path "$project_root/vendor/wsl-bridge/Cargo.toml" \
+                --release --target x86_64-pc-windows-gnu > "$build_dir/wsl-bridge-build.log" 2>&1 || {
+                show_failure "$build_dir/wsl-bridge-build.log"; return 1; }
+            cp -- "$wb_target/x86_64-pc-windows-gnu/release/wsl-bridge.exe" "$build_dir/wsl-bridge.exe"
+            "$triplet-strip" -s "$build_dir/wsl-bridge.exe"
+            windres_extra=(-DHAS_EMBEDDED_WSL_BRIDGE=1 -I "$build_dir")
+            printf 'Embedded wsl-bridge.exe: %s bytes\n' "$(stat -c '%s' "$build_dir/wsl-bridge.exe")"
+        fi
+    fi
     local manifest_resource=$build_dir/obj/dropbear-win-manifest.o
-    "$triplet-windres" -I "$project_root/src/windows" -i "$project_root/src/windows/dropbear-win.rc" \
+    "$triplet-windres" -I "$project_root/src/windows" "${windres_extra[@]}" -i "$project_root/src/windows/dropbear-win.rc" \
         -o "$manifest_resource" -O coff
     # libtommath inherits CFLAGS but not the parent Makefile's CPPFLAGS.
     # Keep the Windows options here as well, so every bundled library sees them.

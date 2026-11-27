@@ -178,3 +178,18 @@ When the service runs as `NT AUTHORITY\SYSTEM`, commands do not see a logged-on 
 Ordinary SSH commands live inside a channel Job that terminates child trees on disconnect. For long-running daemons, dev servers, or tasks that must survive SSH disconnect, use `dropbear_bg_start` (or SSH `bg [--log <file>] [--active|--user <u|id>|--admin|--in-session] <cmd>`) instead of creating Windows Scheduled Tasks:
 
 - Breaks out of the SSH Job cleanly (`CREATE_BREAKAWAY_FROM_JOB`), runs silently (`CREATE_NO_WINDOW`, `SW_HIDE`, `STARTF_FORCEOFFFEEDBACK`), detaches stdio to `NUL` or `log_path`, and returns `{"detached": true, "pid": ...}` immediately.
+
+## Embedded `wsl-bridge` (Debian WSL1 Direct Pass-Through)
+
+`dropbear-win-x64.exe` embeds the zero-dependency Rust `wsl-bridge.exe` binary (`vendor/wsl-bridge`) as a Win32 PE `RCDATA` resource while preserving strict Windows XP/2003 DLL imports (`ADVAPI32`, `KERNEL32`, `msvcrt`, `WS2_32` only).
+
+- **Direct SSH built-ins** (bypass `cmd.exe`, lossless UTF-8 & binary stdio, ~1–22 ms via shared `C:\ProgramData\wsl-bridge\broker.json`):
+  - `ssh HOST wsl-bridge status`
+  - `ssh HOST wsl-bridge exec [--cwd <dir>] [--env K=V] [--sudo] -- <cmd> [args...]`
+  - `ssh HOST wsl-bash -c "whoami && sudo -n id -u"`
+  - `ssh HOST wsl-bridge path --to-linux "C:\Users\Amamiya"`
+- **Local CLI flags**:
+  - `dropbear-win-x64.exe --wsl-bridge <args...>`
+  - `dropbear-win-x64.exe --wsl-bridge --extract [dir]`
+  - `dropbear-win-x64.exe --wsl-bridge --install-shims [dir]` (extracts `wsl-bridge.exe`, `bash.exe`, `sh.exe`)
+- **MCP tools** (in `tools/dropbear_mcp.py`): `dropbear_wsl_status`, `dropbear_wsl_exec`, `dropbear_wsl_bash`.

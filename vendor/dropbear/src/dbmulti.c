@@ -112,6 +112,7 @@ void dropbear_win_agent_banner(char *output, size_t size) {
 		"  - File transfer: SFTP v3 (`sftp`) and SCP (`scp`) supported directly (no chunked echo needed)\r\n"
 		"  - Long commands: up to 64 KB per SSH exec (automatically bypasses Windows 8 KB cmd.exe limit)\r\n"
 		"  - Built-in JS runtime: `qjs -e \"<code>\"` or `qjs -` (QuickJS-ng ES2023, reads stdin)\r\n"
+		"  - Built-in WSL1 bridge: `wsl-bridge <status|exec|bash|path|mcp>` or `wsl-bash -c \"<cmd>\"` (embedded, ~1-22ms loopback broker)\r\n"
 		"  - Live PATH: System + User PATH refreshed automatically on every connection\r\n"
 		"  - User switch: `su --list`, `su [--admin] [--in-session] <user|--active> <cmd>`, `su [--admin] --session <id> <cmd>`, or `su -p <pwd> <user> <cmd>` (silent)\r\n"
 		"  - Detached background: `bg [--log <file>] [--active|--user <u|id>|--admin|--in-session] <cmd>` (survives SSH disconnect, returns JSON pid)\r\n"
@@ -159,7 +160,7 @@ static int print_agent_probe(void) {
 	fputs("\"identity_rule\":\"SSH user is a Dropbear authentication label; ordinary commands inherit the server process Windows token\","
 		"\"agent_guide_command\":\"__dropbear_win_guide__\","
 		"\"system_query_commands\":[\"uname\",\"sysinfo\",\"cpuinfo\",\"meminfo\",\"diskinfo\",\"toolsinfo\"],"
-		"\"script_staging\":true,\"qjs\":true,\"path_refreshed\":true,\"tools\":", stdout);
+		"\"script_staging\":true,\"qjs\":true,\"wsl_bridge\":true,\"user_switch\":true,\"bg_detach\":true,\"path_refreshed\":true,\"tools\":", stdout);
 	dropbear_win_print_tools_json(stdout);
 	fputs(","
 		"\"desktop_launch\":{\"command\":\"--desktop-launch\","
@@ -349,6 +350,9 @@ static int run_native_internal(int argc, char **argv) {
 	if (argc >= 2 && !strcmp(argv[1], "--qjs")) {
 		return dropbear_win_qjs_main(argc - 1, argv + 1);
 	}
+	if (argc >= 2 && !strcmp(argv[1], "--wsl-bridge")) {
+		return dropbear_win_wsl_main(argc - 1, argv + 1);
+	}
 	if (argc == 3 && !strcmp(argv[1], "--dropbear-win-su")) {
 		char *command = decode_hex_command(argv[2]);
 		int result;
@@ -362,6 +366,14 @@ static int run_native_internal(int argc, char **argv) {
 		int result;
 		if (!command) return 2;
 		result = dropbear_win_qjs_exec_command(command);
+		m_free(command);
+		return result;
+	}
+	if (argc == 3 && !strcmp(argv[1], "--dropbear-win-wsl")) {
+		char *command = decode_hex_command(argv[2]);
+		int result;
+		if (!command) return 2;
+		result = dropbear_win_wsl_exec_command(command);
 		m_free(command);
 		return result;
 	}
