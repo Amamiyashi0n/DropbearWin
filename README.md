@@ -311,7 +311,9 @@ WINEPREFIX="$PWD/build/wine-setup-test" python3 tests/test_setup_prompt.py \
 
 ## Embedded `wsl-bridge` (Debian WSL1 Direct Pass-Through)
 
-`dropbear-win-x64.exe` embeds the zero-dependency Rust `wsl-bridge.exe` binary (`vendor/wsl-bridge`) as a Win32 PE `RCDATA` resource while preserving strict Windows XP/2003 DLL imports (`ADVAPI32`, `KERNEL32`, `msvcrt`, `WS2_32` only).
+`dropbear-win-x64.exe` embeds the zero-dependency Rust `wsl-bridge.exe` binary (`vendor/wsl-bridge`) by default at build time as a Win32 PE `RCDATA` resource while preserving strict Windows XP/2003 DLL imports (`ADVAPI32`, `KERNEL32`, `msvcrt`, `WS2_32` only).
+
+- **Automatic WSL Detection & Built-in Bridge Supervisor (Single-Service)**: On startup, `DropbearWin` automatically probes the host for WSL (`C:\Windows\System32\wsl.exe` + `Lxss` registry across logged-in and unloaded profiles). When WSL exists, `DropbearWin` itself automatically ensures `LxssManager` is running, secures `C:\ProgramData\wsl-bridge`, launches and supervises the `HIGH_PRIORITY_CLASS` loopback broker (via WTS Session 0 or passwordless `MSV1_0` S4U logon even with no user logged on), and advertises `wsl-bridge` to agents — **no separate `wsl-bridge` daemon or Scheduled Task is needed**. On Windows hosts without WSL, the bridge stays completely dormant.
 
 - **Direct SSH built-ins** (bypass `cmd.exe`, lossless UTF-8 & binary stdio, ~1–22 ms via shared `C:\ProgramData\wsl-bridge\broker.json`):
   - `ssh HOST wsl-bridge status`

@@ -105,14 +105,22 @@ int dropbear_win_agent_publish(void) {
 
 void dropbear_win_agent_banner(char *output, size_t size) {
 	char tools_summary[512];
+	char wsl_line[256] = "";
+	char wsl_distro[128] = "";
 	dropbear_win_format_tools_summary(tools_summary, sizeof(tools_summary), NULL);
+	if (dropbear_win_wsl_is_available()) {
+		dropbear_win_wsl_distro_utf8(wsl_distro, sizeof(wsl_distro));
+		snprintf(wsl_line, sizeof(wsl_line),
+			"  - Built-in WSL bridge (%s): `wsl-bridge <status|exec|bash|path|mcp>` or `wsl-bash -c \"<cmd>\"` (auto-loaded, ~1-22ms broker)\r\n",
+			wsl_distro[0] ? wsl_distro : "WSL");
+	}
 	snprintf(output, size,
 		"\r\n[DropbearWin Agent discovery]\r\n"
 		"Server capabilities:\r\n"
 		"  - File transfer: SFTP v3 (`sftp`) and SCP (`scp`) supported directly (no chunked echo needed)\r\n"
 		"  - Long commands: up to 64 KB per SSH exec (automatically bypasses Windows 8 KB cmd.exe limit)\r\n"
 		"  - Built-in JS runtime: `qjs -e \"<code>\"` or `qjs -` (QuickJS-ng ES2023, reads stdin)\r\n"
-		"  - Built-in WSL1 bridge: `wsl-bridge <status|exec|bash|path|mcp>` or `wsl-bash -c \"<cmd>\"` (embedded, ~1-22ms loopback broker)\r\n"
+		"%s"
 		"  - Live PATH: System + User PATH refreshed automatically on every connection\r\n"
 		"  - User switch: `su --list`, `su [--admin] [--in-session] <user|--active> <cmd>`, `su [--admin] --session <id> <cmd>`, or `su -p <pwd> <user> <cmd>` (silent)\r\n"
 		"  - Detached background: `bg [--log <file>] [--active|--user <u|id>|--admin|--in-session] <cmd>` (survives SSH disconnect, returns JSON pid)\r\n"
@@ -123,6 +131,7 @@ void dropbear_win_agent_banner(char *output, size_t size) {
 		"  ssh HOST sysinfo                     (OS, CPU, memory, disk summary)\r\n"
 		"  ssh HOST __dropbear_win_probe__      (JSON capabilities, Windows token/session, and tools)\r\n"
 		"  ssh HOST __dropbear_win_manifest__   (Skill/MCP file paths and SHA-256)\r\n\r\n",
+		wsl_line,
 		tools_summary[0] ? tools_summary : "qjs (embedded)");
 }
 
@@ -160,7 +169,20 @@ static int print_agent_probe(void) {
 	fputs("\"identity_rule\":\"SSH user is a Dropbear authentication label; ordinary commands inherit the server process Windows token\","
 		"\"agent_guide_command\":\"__dropbear_win_guide__\","
 		"\"system_query_commands\":[\"uname\",\"sysinfo\",\"cpuinfo\",\"meminfo\",\"diskinfo\",\"toolsinfo\"],"
-		"\"script_staging\":true,\"qjs\":true,\"wsl_bridge\":true,\"user_switch\":true,\"bg_detach\":true,\"path_refreshed\":true,\"tools\":", stdout);
+		"\"script_staging\":true,\"qjs\":true,\"user_switch\":true,\"bg_detach\":true,\"path_refreshed\":true,", stdout);
+	{
+		int wsl_avail = dropbear_win_wsl_is_available();
+		char wsl_distro[128] = "";
+		fprintf(stdout, "\"wsl_bridge\":%s,\"wsl_bridge_embedded\":%s,",
+			wsl_avail ? "true" : "false",
+			dropbear_win_wsl_has_embedded() ? "true" : "false");
+		if (wsl_avail && dropbear_win_wsl_distro_utf8(wsl_distro, sizeof(wsl_distro))) {
+			fputs("\"wsl_distro\":", stdout);
+			print_json_string(wsl_distro);
+			fputc(',', stdout);
+		}
+	}
+	fputs("\"tools\":", stdout);
 	dropbear_win_print_tools_json(stdout);
 	fputs(","
 		"\"desktop_launch\":{\"command\":\"--desktop-launch\","

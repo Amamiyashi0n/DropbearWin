@@ -67,7 +67,10 @@ int dropbear_win_stop_requested(void) {
 	return 1;
 }
 void dropbear_win_listener_ready(void) {
-	if (!dropbear_win_stop_requested()) report_status(SERVICE_RUNNING, 0);
+	if (!dropbear_win_stop_requested()) {
+		report_status(SERVICE_RUNNING, 0);
+		dropbear_win_wsl_supervisor_start();
+	}
 }
 void dropbear_win_service_stopped(int code) {
 	if (listener_stopped) SetEvent(listener_stopped);

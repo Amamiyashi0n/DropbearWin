@@ -318,7 +318,7 @@ void dropbear_win_print_tools_json(FILE *stream) {
 		fputs("\"qjs\":", stream);
 		print_json_escaped(stream, qjs_cmd);
 		first = 0;
-		if (dropbear_win_wsl_has_embedded()) {
+		if (dropbear_win_wsl_is_available()) {
 			char wsl_cmd[MAX_PATH * 3 + 24];
 			snprintf(wsl_cmd, sizeof(wsl_cmd), "%s --wsl-bridge", utf8);
 			fputs(",\"wsl-bridge\":", stream);
@@ -389,7 +389,7 @@ void dropbear_win_format_tools_summary(char *output, size_t output_size, const w
 		search_path = owned_path;
 	}
 
-	if (dropbear_win_wsl_has_embedded()) {
+	if (dropbear_win_wsl_is_available()) {
 		used += (size_t)snprintf(output + used, output_size - used, "qjs (embedded), wsl-bridge (embedded)");
 		count += 2;
 	} else {

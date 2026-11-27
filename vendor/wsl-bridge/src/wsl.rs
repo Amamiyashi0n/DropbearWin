@@ -858,12 +858,13 @@ pub fn run_daemon(cfg: &Config) -> i32 {
     while !ctrl_triggered() {
         let token = random_token_hex();
         let _ = fs::remove_file(&broker_info_win);
-        let mut child = match Command::new(WSL_EXE)
+        let mut wsl_cmd = Command::new(WSL_EXE);
+        wsl_cmd.args(["-d", &cfg.distro]);
+        if !cfg.user.is_empty() && cfg.user != "auto" {
+            wsl_cmd.args(["-u", &cfg.user]);
+        }
+        let mut child = match wsl_cmd
             .args([
-                "-d",
-                &cfg.distro,
-                "-u",
-                &cfg.user,
                 "--exec",
                 "/usr/bin/python3",
                 "-u",

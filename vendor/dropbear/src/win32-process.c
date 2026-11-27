@@ -1884,6 +1884,7 @@ void dropbear_win_reap_connections(void) {
 
 void dropbear_win_process_cleanup(void) {
 	unsigned int i;
+	dropbear_win_wsl_supervisor_stop();
 	ensure_process_table();
 	EnterCriticalSection(&process_lock);
 	for (i = 0; i < sizeof(processes) / sizeof(processes[0]); i++) {

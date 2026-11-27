@@ -146,17 +146,19 @@ build_target() {
     local windres_extra=()
     if [[ "$arch" == x64 ]] && [[ -f "$project_root/vendor/wsl-bridge/Cargo.toml" ]]; then
         export PATH="$HOME/.cargo/bin:$PATH"
-        if command -v cargo >/dev/null 2>&1; then
-            printf 'Cross-compiling embedded wsl-bridge (x86_64-pc-windows-gnu)...\n'
-            local wb_target="${WSL_BRIDGE_TARGET_DIR:-$HOME/.cache/wsl-bridge-target}"
-            CARGO_TARGET_DIR="$wb_target" cargo build --manifest-path "$project_root/vendor/wsl-bridge/Cargo.toml" \
-                --release --target x86_64-pc-windows-gnu > "$build_dir/wsl-bridge-build.log" 2>&1 || {
-                show_failure "$build_dir/wsl-bridge-build.log"; return 1; }
-            cp -- "$wb_target/x86_64-pc-windows-gnu/release/wsl-bridge.exe" "$build_dir/wsl-bridge.exe"
-            "$triplet-strip" -s "$build_dir/wsl-bridge.exe"
-            windres_extra=(-DHAS_EMBEDDED_WSL_BRIDGE=1 -I "$build_dir")
-            printf 'Embedded wsl-bridge.exe: %s bytes\n' "$(stat -c '%s' "$build_dir/wsl-bridge.exe")"
+        if ! command -v cargo >/dev/null 2>&1; then
+            printf 'Missing cargo for default embedded wsl-bridge (install rustup + x86_64-pc-windows-gnu)\n' >&2
+            return 1
         fi
+        printf 'Cross-compiling embedded wsl-bridge (x86_64-pc-windows-gnu)...\n'
+        local wb_target="${WSL_BRIDGE_TARGET_DIR:-$HOME/.cache/wsl-bridge-target}"
+        CARGO_TARGET_DIR="$wb_target" cargo build --manifest-path "$project_root/vendor/wsl-bridge/Cargo.toml" \
+            --release --target x86_64-pc-windows-gnu > "$build_dir/wsl-bridge-build.log" 2>&1 || {
+            show_failure "$build_dir/wsl-bridge-build.log"; return 1; }
+        cp -- "$wb_target/x86_64-pc-windows-gnu/release/wsl-bridge.exe" "$build_dir/wsl-bridge.exe"
+        "$triplet-strip" -s "$build_dir/wsl-bridge.exe"
+        windres_extra=(-DHAS_EMBEDDED_WSL_BRIDGE=1 -I "$build_dir")
+        printf 'Embedded wsl-bridge.exe: %s bytes\n' "$(stat -c '%s' "$build_dir/wsl-bridge.exe")"
     fi
     local manifest_resource=$build_dir/obj/dropbear-win-manifest.o
     "$triplet-windres" -I "$project_root/src/windows" "${windres_extra[@]}" -i "$project_root/src/windows/dropbear-win.rc" \
@@ -172,6 +174,7 @@ build_target() {
     local ldflags="$crtflag -static -static-libgcc -Wl,--gc-sections -Wl,--major-os-version,$major,--minor-os-version,$minor -Wl,--major-subsystem-version,$major,--minor-subsystem-version,$minor"
 
     printf 'Cross-compiling %s with %s-gcc\n' "$arch" "$triplet"
+    if [[ ! -f "$build_dir/Makefile" || "$source_dir/Makefile.in" -nt "$build_dir/Makefile" ]]; then
     if ! (cd "$build_dir" && env \
         CC="$triplet-gcc" AR="$triplet-ar" RANLIB="$triplet-ranlib" STRIP="$triplet-strip" \
         ac_cv_c_undeclared_builtin_options='none needed' \
@@ -194,6 +197,7 @@ build_target() {
         > configure-output.log 2>&1); then
         show_failure "$build_dir/configure-output.log"
         return 1
+    fi
     fi
     if ! make -C "$build_dir" -j"$jobs" \
         PROGRAMS='dropbear scp' MULTI=1 STATIC=1 \
